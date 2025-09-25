@@ -1,0 +1,627 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Ledger Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; background: #0b1020; color: #E6EDF3; }
+    header { padding: 16px 20px; border-bottom: 1px solid #1f2335; position: sticky; top: 0; background: #0b1020; z-index: 10; }
+  .container { max-width: 1100px; margin: 0 auto; padding: 20px; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .card { background: #0f1533; border: 1px solid #1f2335; border-radius: 10px; padding: 16px; }
+    .muted { color: #9aa4b2; }
+    .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .hstack { display: flex; align-items: center; gap: 12px; }
+    select, input[type="month"], input[type="text"] { background: #11183a; border: 1px solid #2a3154; color: #E6EDF3; padding: 8px 10px; border-radius: 8px; }
+    .table { width: 100%; border-collapse: collapse; }
+    .table th, .table td { padding: 8px; border-bottom: 1px solid #1f2335; }
+    .pill { background:#10394a; color:#6bd5ff; font-weight:600; padding:2px 8px; border-radius:999px; font-size:12px; }
+    a { color: #6bd5ff; }
+  .right { margin-left: auto; }
+  .btn { background:#1a224d; color:#E6EDF3; border:1px solid #2a3154; border-radius:8px; padding:6px 10px; cursor:pointer; }
+  .btn:hover { filter: brightness(1.1); }
+  .iconbtn { background:transparent; border:none; cursor:pointer; font-size:16px; }
+  .tooltip { text-decoration: dotted underline; cursor: help; }
+  /* modal */
+  .modal { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display:none; align-items:center; justify-content:center; padding:20px; }
+  .modal .panel { background:#0f1533; border:1px solid #1f2335; border-radius:10px; max-width:800px; width:100%; max-height:80vh; overflow:auto; padding:16px; }
+  .modal .header { display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; }
+  .modal .item { border:1px solid #1f2335; border-radius:8px; padding:8px; margin:8px 0; }
+  .modal input { width: 180px; }
+  /* light theme */
+  body.light { background:#ffffff; color:#0b1020; }
+  body.light header { background:#ffffff; border-bottom-color:#e6e6e6; }
+  body.light .card { background:#ffffff; border-color:#e6e6e6; }
+  body.light .muted { color:#555; }
+  body.light select, body.light input[type="month"], body.light input[type="text"] { background:#fff; color:#0b1020; border-color:#d0d0d0; }
+  body.light .table th, body.light .table td { border-bottom-color:#eee; }
+  body.light a { color:#005bbb; }
+  body.light .modal .panel { background:#fff; border-color:#e6e6e6; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="container hstack" style="justify-content: space-between;">
+      <div class="hstack">
+        <strong>Ledger Dashboard</strong>
+        <span class="muted">·</span>
+        <span id="status" class="muted">Connecting…</span>
+      </div>
+      <div class="hstack">
+        <button id="theme" title="Toggle theme">🌓</button>
+        <label>Month</label>
+        <button id="prev">◀</button>
+        <input id="month" type="month" />
+        <button id="next">▶</button>
+        <select id="timescale" title="Timescale">
+          <option value="daily">Daily</option>
+          <option value="weekly">Weekly</option>
+          <option value="monthly">Monthly</option>
+          <option value="yearly">Yearly</option>
+        </select>
+        <select id="chat" title="Chat (optional)"><option value="">All chats</option></select>
+        <span id="lock" title="Auth token is not set">🔓</span>
+        <input id="token" type="text" placeholder="Bearer token (optional)" style="min-width:260px" />
+        <button id="refresh">Refresh</button>
+      </div>
+    </div>
+  </header>
+
+  <div class="container" id="content" style="display:none;">
+    <div class="grid-3" style="margin-bottom:16px;">
+      <div class="card"><div class="muted">Expense</div><div id="totalExpense" style="font-size:28px;font-weight:700;">—</div></div>
+      <div class="card"><div class="muted">Income</div><div id="totalIncome" style="font-size:28px;font-weight:700;">—</div></div>
+      <div class="card">
+        <div class="muted">Top category</div>
+        <div id="topcat" style="font-size:28px;font-weight:700;">—</div>
+        <div class="muted" style="margin-top:8px;">Δ vs last month: <span id="delta">—</span></div>
+      </div>
+    </div>
+
+    <div class="grid-2" style="margin-bottom:16px;">
+      <div class="card">
+        <div class="hstack" style="justify-content: space-between;">
+          <strong title="Transfers are excluded; negatives are refunds">By category</strong>
+          <span class="pill" id="currency">—</span>
+        </div>
+        <div class="hstack" style="gap:8px;margin:8px 0;">
+          <label class="muted">Filter</label>
+          <select id="catFilter"><option value="">All</option></select>
+          <button id="clearFilter" class="right">Clear</button>
+        </div>
+        <canvas id="pie" height="200" title="Click a slice to filter"></canvas>
+      </div>
+      <div class="card">
+        <strong title="Transfers are excluded; negatives are refunds">Daily totals</strong>
+        <canvas id="line" height="200"></canvas>
+        <div class="hstack" style="margin-top:12px; gap:16px; align-items:flex-start;">
+          <div style="flex:1;">
+            <div class="muted" style="margin-bottom:6px;">FX breakdown</div>
+            <canvas id="fxpie" height="140"></canvas>
+          </div>
+          <div style="flex:1;">
+            <div class="muted" style="margin-bottom:6px;">Budgets</div>
+            <div id="budgets"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="hstack" style="justify-content: space-between;">
+        <strong title="Transfers are excluded from charts; negatives are refunds">Recent entries</strong>
+        <div class="hstack">
+          <a id="reportLink" href="#" target="_blank" rel="noreferrer">Open monthly report</a>
+            <button id="uncatBtn" class="btn" title="Resolve uncategorized entries">Uncategorized</button>
+            <button id="suggestionsBtn" class="btn" title="Review OCR suggestions">Suggestions</button>
+          <button id="exportCsv">Export CSV</button>
+        </div>
+      </div>
+      <table class="table" id="entries">
+        <thead>
+          <tr><th>Date</th><th>Code</th><th>Description</th><th>Cur</th><th style="text-align:right;" title="Negative amounts are refunds">Amount</th><th>Actions</th></tr>
+          <tr id="filterRow">
+            <th></th>
+            <th><input id="fCode" type="text" placeholder="Filter code" /></th>
+            <th><input id="fDesc" type="text" placeholder="Filter description" /></th>
+            <th><input id="fCur" type="text" placeholder="Filter cur" /></th>
+            <th></th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Uncategorized modal -->
+  <div class="modal" id="uncatModal">
+    <div class="panel">
+      <div class="header">
+        <strong>Resolve Uncategorized</strong>
+        <div class="hstack">
+          <button id="uncatReload" class="btn">Reload</button>
+          <button id="uncatClose" class="btn">Close</button>
+        </div>
+      </div>
+      <div id="uncatList"></div>
+    </div>
+  </div>
+
+  <!-- Suggestions modal -->
+  <div class="modal" id="suggestionsModal">
+    <div class="panel">
+      <div class="header">
+        <strong>OCR Suggestions</strong>
+        <div class="hstack">
+          <button id="suggestionsReload" class="btn">Reload</button>
+          <button id="suggestionsClose" class="btn">Close</button>
+        </div>
+      </div>
+      <div id="suggestionsList"></div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+  <script>
+    const apiBase = location.origin.replace(/\/$/, '');
+    const qs = (sel) => document.querySelector(sel);
+  const monthInput = qs('#month');
+  const prevBtn = qs('#prev');
+  const nextBtn = qs('#next');
+  const chatSel = qs('#chat');
+  const timescaleSel = qs('#timescale');
+    const tokenInput = qs('#token');
+  const lockIcon = qs('#lock');
+    const statusEl = qs('#status');
+  const themeBtn = qs('#theme');
+  const catFilter = qs('#catFilter');
+  const clearFilterBtn = qs('#clearFilter');
+  const exportCsvBtn = qs('#exportCsv');
+  const entriesTable = qs('#entries');
+  const uncatBtn = qs('#uncatBtn');
+  const uncatModal = qs('#uncatModal');
+  const uncatClose = qs('#uncatClose');
+  const uncatReload = qs('#uncatReload');
+  const uncatList = qs('#uncatList');
+  const fCode = () => document.getElementById('fCode');
+  const fDesc = () => document.getElementById('fDesc');
+  const fCur = () => document.getElementById('fCur');
+
+    function yyyymm(d = new Date()) {
+      return d.getUTCFullYear() + '-' + String(d.getUTCMonth() + 1).padStart(2, '0');
+    }
+
+    async function fetchJson(url, token) {
+      const headers = token ? { Authorization: 'Bearer ' + token } : {};
+      const r = await fetch(url, { headers });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    }
+
+    function fmt(n) { return (Math.round(n * 100) / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+    function toCsv(rows) {
+      if (!rows || !rows.length) return '';
+      const cols = ['createdAt','code','description','amount','currency'];
+      const esc = (s) => '"' + String(s ?? '').replace(/"/g,'""') + '"';
+      const head = cols.join(',');
+      const body = rows.map(r => cols.map(c => esc(r[c])).join(',')).join('\n');
+      return head + '\n' + body + '\n';
+    }
+    function saveBlob(name, text) {
+      const blob = new Blob([text], { type: 'text/csv;charset=utf-8' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = name;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    }
+
+  let pieChart, lineChart, fxChart;
+  let entriesData = [];
+
+    async function load() {
+      const m = monthInput.value;
+      const token = tokenInput.value.trim();
+      const chat = chatSel.value;
+      if (token) localStorage.setItem('dash_token', token); else localStorage.removeItem('dash_token');
+      statusEl.textContent = 'Loading ' + m + '…';
+
+      const qp = (s) => s + (chat ? ('&chatId=' + encodeURIComponent(chat)) : '');
+      const [summary, byCat, daily, entries] = await Promise.all([
+        fetchJson(qp(apiBase + '/api/summary?month=' + m), token),
+        fetchJson(qp(apiBase + '/api/by-category?month=' + m), token),
+        fetchJson(qp(apiBase + '/api/daily?month=' + m), token),
+        fetchJson(qp(apiBase + '/api/entries?month=' + m + '&limit=100'), token),
+      ]);
+
+      // Summary cards
+  const totalExpense = (typeof summary.totalExpense === 'number') ? summary.totalExpense : (typeof summary.total === 'number' ? summary.total : 0);
+  const totalIncome = (typeof summary.totalIncome === 'number') ? summary.totalIncome : 0;
+  qs('#totalExpense').textContent = fmt(totalExpense);
+  qs('#totalIncome').textContent = fmt(totalIncome);
+      qs('#topcat').textContent = summary.topCategory || '—';
+      qs('#currency').textContent = summary.currency || '—';
+
+      // FX breakdown pie
+      try {
+        const fx = summary.fx || [];
+        const fxl = fx.map(x => x.currency);
+        const fxd = fx.map(x => x.amount);
+        const fxColors = fxl.map((_, i) => `hsl(${(i * 73) % 360} 65% 50%)`);
+        if (fxChart) fxChart.destroy();
+        const fxCtx = qs('#fxpie');
+        fxChart = new Chart(fxCtx, { type: 'doughnut', data: { labels: fxl, datasets: [{ data: fxd, backgroundColor: fxColors }] }, options: { plugins: { legend: { labels: { color: getComputedStyle(document.body).color } } } } });
+      } catch (_) {}
+
+      // Pie chart
+      const pieCtx = qs('#pie');
+      const labels = byCat.data.map(x => x.category);
+      const data = byCat.data.map(x => x.amount);
+      const colors = labels.map((_, i) => `hsl(${(i * 47) % 360} 70% 45%)`);
+      if (pieChart) pieChart.destroy();
+      pieChart = new Chart(pieCtx, {
+        type: 'doughnut',
+        data: { labels, datasets: [{ data, backgroundColor: colors }]},
+        options: {
+          plugins: { legend: { labels: { color: getComputedStyle(document.body).color } } },
+          onClick: (evt) => {
+            const points = pieChart.getElementsAtEventForMode(evt, 'nearest', { intersect: true }, true);
+            if (points.length) {
+              const idx = points[0].index;
+              const cat = labels[idx];
+              catFilter.value = cat;
+              load().catch(err => statusEl.textContent = err.message);
+            }
+          }
+        }
+      });
+
+      // Category filter dropdown options
+      catFilter.innerHTML = '<option value="">All</option>' + labels.map(c => `<option value="${c}">${c}</option>`).join('');
+
+      // Timeseries chart (Daily/Weekly/Monthly/Yearly)
+      const lineCtx = qs('#line');
+      const ts = timescaleSel.value;
+      let labelsTS = [], valuesTS = [];
+      if (ts === 'daily') {
+        labelsTS = daily.data.map(x => x.date.slice(8,10));
+        valuesTS = daily.data.map(x => x.amount);
+      } else if (ts === 'weekly') {
+        const w = await fetchJson(qp(apiBase + '/api/weekly?month=' + m), token);
+        labelsTS = w.data.map(x => x.week.split('-W')[1]);
+        valuesTS = w.data.map(x => x.amount);
+      } else if (ts === 'monthly') {
+        const y = m.split('-')[0];
+        const mo = await fetchJson(qp(apiBase + '/api/monthly?year=' + y), token);
+        labelsTS = mo.data.map(x => x.month.slice(5));
+        valuesTS = mo.data.map(x => x.amount);
+      } else if (ts === 'yearly') {
+        const y = parseInt(m.split('-')[0], 10);
+        const start = y - 3; // last 4 years
+        const yr = await fetchJson(qp(apiBase + '/api/yearly?start=' + start + '&end=' + y), token);
+        labelsTS = yr.data.map(x => String(x.year));
+        valuesTS = yr.data.map(x => x.amount);
+      }
+  if (lineChart) lineChart.destroy();
+  const tickColor = getComputedStyle(document.body).color;
+  lineChart = new Chart(lineCtx, { type: 'line', data: { labels: labelsTS, datasets: [{ data: valuesTS, borderColor: '#6bd5ff', tension: 0.2 }]}, options: { scales: { x: { ticks: { color: tickColor } }, y: { ticks: { color: tickColor } } }, plugins: { legend: { display: false } }}});
+
+      // Budgets progress
+      try {
+        const prog = await fetchJson(qp(apiBase + '/api/budgets/progress?month=' + m), token);
+        const wrap = qs('#budgets');
+        wrap.innerHTML = '';
+        for (const b of prog.data) {
+          const pct = Math.round((b.percent ?? 0));
+          const barColor = pct >= 100 ? '#ff6b6b' : (pct >= 80 ? '#f7b500' : '#4caf50');
+          const row = document.createElement('div');
+          row.style.marginBottom = '8px';
+          row.innerHTML = `
+            <div class="hstack" style="justify-content: space-between; font-size: 12px;">
+              <span>${b.category}</span>
+              <span class="muted">${fmt(b.spentJod)} / ${fmt(b.capJod)} JOD (${isFinite(pct)?pct:0}%)</span>
+            </div>
+            <div style="height: 6px; background: #1f2335; border-radius: 999px; overflow: hidden;">
+              <div style="width:${Math.max(0, Math.min(100, pct))}%; height:100%; background:${barColor};"></div>
+            </div>
+          `;
+          wrap.appendChild(row);
+        }
+      } catch (_) {}
+
+      // Entries table (inline edit/delete with filters)
+      entriesData = entries.data.slice();
+      renderEntries();
+
+      // Report link (if file exists it will download/open)
+      const year = m.split('-')[0];
+      const mm = m.split('-')[1].padStart(2, '0');
+      qs('#reportLink').href = apiBase + '/files/ledger_' + year + '-' + mm + '.xlsx';
+
+      // Delta vs last month
+      try {
+        const [yy, mm] = m.split('-').map(Number);
+        const prev = new Date(Date.UTC(yy, mm - 2, 1));
+        const pm = prev.getUTCFullYear() + '-' + String(prev.getUTCMonth() + 1).padStart(2, '0');
+        const prevSum = await fetchJson(qp(apiBase + '/api/summary?month=' + pm), token);
+  const curNet = (summary.net != null) ? summary.net : (summary.total ?? 0);
+  const prevNet = (prevSum.net != null) ? prevSum.net : (prevSum.total ?? 0);
+  const diff = curNet - prevNet;
+        const sign = diff > 0 ? '+' : '';
+        qs('#delta').textContent = `${sign}${fmt(diff)}`;
+      } catch { qs('#delta').textContent = '—'; }
+
+      statusEl.textContent = 'Ready';
+      qs('#content').style.display = '';
+    }
+
+    function setLockIcon() {
+      const has = (tokenInput.value.trim().length > 0);
+      lockIcon.textContent = has ? '🔒' : '🔓';
+      lockIcon.title = has ? 'Auth token saved (requests include bearer header)' : 'Auth token is not set';
+    }
+
+    function filteredEntries() {
+      const codeQ = fCode()?.value?.trim().toLowerCase() || '';
+      const descQ = fDesc()?.value?.trim().toLowerCase() || '';
+      const curQ = fCur()?.value?.trim().toLowerCase() || '';
+      return entriesData.filter(e => (
+        (!codeQ || String(e.code||'').toLowerCase().includes(codeQ)) &&
+        (!descQ || String(e.description||'').toLowerCase().includes(descQ)) &&
+        (!curQ || String(e.currency||'').toLowerCase().includes(curQ))
+      ));
+    }
+
+    function attachEditable(td, field, entry) {
+      td.dataset.field = field;
+      td.title = 'Double-click to edit';
+      td.addEventListener('dblclick', () => {
+        if (td.querySelector('input')) return;
+        const curVal = field === 'code' ? (entry.code||'') : (field === 'description' ? (entry.description||'') : (entry.currency||''));
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.value = curVal;
+        input.style.width = '100%';
+        td.innerHTML = '';
+        td.appendChild(input);
+        input.focus();
+        const commit = async () => {
+          const newVal = input.value.trim();
+          if (newVal === curVal) { td.textContent = curVal; return; }
+          try {
+            const token = tokenInput.value.trim();
+            const resp = await fetch(apiBase + '/api/entries/' + entry.id, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json', ...(token?{ Authorization: 'Bearer ' + token }: {}) },
+              body: JSON.stringify({ [field]: field==='code'? newVal.toUpperCase() : newVal })
+            });
+            if (!resp.ok) throw new Error('HTTP ' + resp.status);
+            await load();
+          } catch (err) {
+            statusEl.textContent = 'Edit failed: ' + err.message;
+            td.textContent = curVal;
+          }
+        };
+        input.addEventListener('keydown', (ev) => {
+          if (ev.key === 'Enter') commit();
+          if (ev.key === 'Escape') { td.textContent = curVal; }
+        });
+        input.addEventListener('blur', commit);
+      });
+    }
+
+    function renderEntries() {
+      const tbody = qs('#entries tbody');
+      tbody.innerHTML = '';
+      for (const e of filteredEntries()) {
+        const tr = document.createElement('tr');
+        tr.dataset.id = e.id;
+        const date = new Date(e.createdAt).toISOString().slice(0, 10);
+        const tdDate = document.createElement('td'); tdDate.textContent = date; tr.appendChild(tdDate);
+        const tdCode = document.createElement('td'); tdCode.textContent = e.code || ''; tr.appendChild(tdCode); attachEditable(tdCode, 'code', e);
+        const tdDesc = document.createElement('td'); tdDesc.textContent = e.description || ''; tr.appendChild(tdDesc); attachEditable(tdDesc, 'description', e);
+        const tdCur = document.createElement('td'); tdCur.textContent = e.currency || ''; tr.appendChild(tdCur); attachEditable(tdCur, 'currency', e);
+        const tdAmt = document.createElement('td'); tdAmt.style.textAlign = 'right'; tdAmt.textContent = fmt(e.amount); tr.appendChild(tdAmt);
+        const tdAct = document.createElement('td');
+        const del = document.createElement('button'); del.className = 'iconbtn'; del.title = 'Delete entry'; del.textContent = '🗑️';
+        del.addEventListener('click', async () => {
+          if (!confirm('Delete this entry?')) return;
+          try {
+            const token = tokenInput.value.trim();
+            const resp = await fetch(apiBase + '/api/entries/' + e.id, { method: 'DELETE', headers: { ...(token?{ Authorization: 'Bearer ' + token }: {}) } });
+            if (!resp.ok) throw new Error('HTTP ' + resp.status);
+            await load();
+          } catch (err) { statusEl.textContent = 'Delete failed: ' + err.message; }
+        });
+        tdAct.appendChild(del); tr.appendChild(tdAct);
+        tbody.appendChild(tr);
+      }
+    }
+
+    async function openUncat() {
+      const m = monthInput.value;
+      const token = tokenInput.value.trim();
+      const chat = chatSel.value;
+      const qp = (s) => s + (chat ? ('&chatId=' + encodeURIComponent(chat)) : '');
+      uncatList.innerHTML = '<div class="muted">Loading…</div>';
+      uncatModal.style.display = 'flex';
+      try {
+        const res = await fetchJson(qp(apiBase + '/api/uncategorized?month=' + m), token);
+        if (!res.data.length) { uncatList.innerHTML = '<div class="muted">Nothing to resolve 🎉</div>'; return; }
+        uncatList.innerHTML = '';
+        for (const r of res.data) {
+          const date = new Date(r.createdAt).toISOString().slice(0,10);
+          const div = document.createElement('div');
+          div.className = 'item';
+          const rest = (r.description||'').split(/\s+/).slice(1).join(' ');
+          div.innerHTML = `
+            <div class="hstack" style="justify-content: space-between;">
+              <div>
+                <div><strong>${date}</strong> — ${r.code || ''} ${fmt(r.amount)} ${(r.currency||'')}
+                </div>
+                <div class="muted">${r.description || '(no description)'}</div>
+              </div>
+              <div class="hstack">
+                <input type="text" placeholder="category" value="" />
+                <button class="btn">Save</button>
+              </div>
+            </div>
+          `;
+          const input = div.querySelector('input');
+          const btn = div.querySelector('button');
+          btn.addEventListener('click', async () => {
+            const cat = (input.value || '').trim().toLowerCase();
+            if (!cat) { input.focus(); return; }
+            const newDesc = rest ? `${cat} ${rest}` : cat;
+            try {
+              const resp = await fetch(apiBase + '/api/entries/' + r.id, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json', ...(token?{ Authorization: 'Bearer ' + token }: {}) },
+                body: JSON.stringify({ description: newDesc })
+              });
+              if (!resp.ok) throw new Error('HTTP ' + resp.status);
+              div.style.opacity = '0.6';
+              btn.disabled = true; btn.textContent = 'Saved';
+              await load();
+            } catch (err) { statusEl.textContent = 'Save failed: ' + err.message; }
+          });
+          uncatList.appendChild(div);
+        }
+      } catch (err) {
+        uncatList.innerHTML = '<div class="muted">Failed: ' + err.message + '</div>';
+      }
+    }
+
+    function shiftMonth(delta) {
+      const [y, m] = monthInput.value.split('-').map(Number);
+      const d = new Date(Date.UTC(y, m - 1 + delta, 1));
+      monthInput.value = yyyymm(d);
+      load().catch(err => statusEl.textContent = err.message);
+    }
+
+    monthInput.value = yyyymm(new Date());
+    tokenInput.value = localStorage.getItem('dash_token') || '';
+    document.getElementById('refresh').addEventListener('click', () => load().catch(err => statusEl.textContent = err.message));
+    prevBtn.addEventListener('click', () => shiftMonth(-1));
+    nextBtn.addEventListener('click', () => shiftMonth(+1));
+    monthInput.addEventListener('change', () => load().catch(err => statusEl.textContent = err.message));
+    chatSel.addEventListener('change', () => load().catch(err => statusEl.textContent = err.message));
+    catFilter.addEventListener('change', () => load().catch(err => statusEl.textContent = err.message));
+    clearFilterBtn.addEventListener('click', () => { catFilter.value = ''; load().catch(err => statusEl.textContent = err.message); });
+    themeBtn.addEventListener('click', () => {
+      document.body.classList.toggle('light');
+      localStorage.setItem('dash_theme', document.body.classList.contains('light') ? 'light' : 'dark');
+      // Re-render charts with new legend colors
+      load().catch(err => statusEl.textContent = err.message);
+    });
+    exportCsvBtn.addEventListener('click', async () => {
+      try {
+        const m = monthInput.value;
+        const token = tokenInput.value.trim();
+        const chat = chatSel.value;
+        const cat = catFilter.value;
+        const qp = (s) => s + (chat ? ('&chatId=' + encodeURIComponent(chat)) : '') + (cat ? ('&category=' + encodeURIComponent(cat)) : '');
+        const entries = await fetchJson(qp(apiBase + '/api/entries?month=' + m + '&limit=1000'), token);
+        const csv = toCsv(entries.data);
+        saveBlob(`ledger_${m}${cat?('_'+cat):''}.csv`, csv);
+      } catch (err) { statusEl.textContent = err.message; }
+    });
+    tokenInput.addEventListener('input', setLockIcon);
+    ['fCode','fDesc','fCur'].forEach(id => document.getElementById(id)?.addEventListener('input', renderEntries));
+    uncatBtn.addEventListener('click', () => openUncat().catch(err => { statusEl.textContent = err.message; }));
+    uncatClose.addEventListener('click', () => { uncatModal.style.display = 'none'; });
+    uncatReload.addEventListener('click', () => openUncat().catch(err => { statusEl.textContent = err.message; }));
+    // Suggestions UI
+    const suggestionsBtn = qs('#suggestionsBtn');
+    const suggestionsModal = qs('#suggestionsModal');
+    const suggestionsClose = qs('#suggestionsClose');
+    const suggestionsReload = qs('#suggestionsReload');
+    const suggestionsList = qs('#suggestionsList');
+
+    async function openSuggestions() {
+      suggestionsList.innerHTML = '<div class="muted">Loading…</div>';
+      suggestionsModal.style.display = 'flex';
+      try {
+        const token = tokenInput.value.trim();
+        const res = await fetchJson(apiBase + '/api/suggestions', token);
+        const items = res.data || [];
+        if (!items.length) { suggestionsList.innerHTML = '<div class="muted">No suggestions</div>'; return; }
+        suggestionsList.innerHTML = '';
+        for (const s of items) {
+          const div = document.createElement('div');
+          div.className = 'item';
+          const ent = s.entry || {};
+          const date = ent.createdAt ? new Date(ent.createdAt).toISOString().slice(0,10) : '';
+          div.innerHTML = `
+            <div class="hstack" style="justify-content: space-between;">
+              <div style="flex:1;">
+                <div><strong>Entry ${s.entryId}</strong> — ${date} — suggested ${s.total} ${s.currency || ''}</div>
+                <div class="muted">Vendor: ${s.vendor || '(unknown)'} · Method: ${s.method || ''}</div>
+                <div class="muted" style="margin-top:6px;">OCR: ${ent.ocrText ? (ent.ocrText.slice(0,200).replace(/\n/g,' ')) : '(none)'}</div>
+              </div>
+              <div class="hstack">
+                ${ent.attachmentUrl ? `<a href="${ent.attachmentUrl}" target="_blank" class="btn">View</a>` : ''}
+                <button data-id="${s.id}" class="btn applyBtn">Apply</button>
+                <button data-id="${s.id}" class="btn rejectBtn">Reject</button>
+              </div>
+            </div>
+          `;
+          suggestionsList.appendChild(div);
+        }
+        // bind actions
+        suggestionsList.querySelectorAll('.applyBtn').forEach(b => b.addEventListener('click', async (ev) => {
+          const id = ev.currentTarget.getAttribute('data-id');
+          if (!confirm('Apply suggestion?')) return;
+          try {
+            const token = tokenInput.value.trim();
+            const resp = await fetch(apiBase + '/api/suggestions/' + id + '/apply', { method: 'POST', headers: { 'Content-Type': 'application/json', ...(token?{ Authorization: 'Bearer ' + token }: {}) } });
+            if (!resp.ok) throw new Error('HTTP ' + resp.status);
+            await openSuggestions();
+            await load();
+          } catch (err) { statusEl.textContent = 'Apply failed: ' + err.message; }
+        }));
+        suggestionsList.querySelectorAll('.rejectBtn').forEach(b => b.addEventListener('click', async (ev) => {
+          const id = ev.currentTarget.getAttribute('data-id');
+          if (!confirm('Reject suggestion?')) return;
+          try {
+            const token = tokenInput.value.trim();
+            const resp = await fetch(apiBase + '/api/suggestions/' + id + '/reject', { method: 'POST', headers: { 'Content-Type': 'application/json', ...(token?{ Authorization: 'Bearer ' + token }: {}) } });
+            if (!resp.ok) throw new Error('HTTP ' + resp.status);
+            await openSuggestions();
+          } catch (err) { statusEl.textContent = 'Reject failed: ' + err.message; }
+        }));
+      } catch (err) {
+        suggestionsList.innerHTML = '<div class="muted">Failed: ' + err.message + '</div>';
+      }
+    }
+    suggestionsBtn.addEventListener('click', () => openSuggestions().catch(err => statusEl.textContent = err.message));
+    suggestionsClose.addEventListener('click', () => { suggestionsModal.style.display = 'none'; });
+    suggestionsReload.addEventListener('click', () => openSuggestions().catch(err => statusEl.textContent = err.message));
+    // initial theme
+    if (localStorage.getItem('dash_theme') === 'light') document.body.classList.add('light');
+  window.addEventListener('DOMContentLoaded', async () => {
+      try {
+        const token = tokenInput.value.trim();
+        const data = await fetchJson(apiBase + '/api/chats', token);
+        for (const c of data.chats) {
+          const opt = document.createElement('option');
+          opt.value = c;
+          opt.textContent = c;
+          chatSel.appendChild(opt);
+        }
+        setLockIcon();
+        await load();
+      } catch (err) {
+        statusEl.textContent = err.message;
+      }
+    });
+    timescaleSel.addEventListener('change', () => load().catch(err => statusEl.textContent = err.message));
+  </script>
+</body>
+</html>

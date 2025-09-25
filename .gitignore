@@ -1,0 +1,28 @@
+﻿# Node
+node_modules/
+
+# Env
+.env
+
+# Database and runtime attachments
+data/ledger.sqlite
+data/attachments/
+data/ai_cache.json
+data/aliases.json
+data/pending_jobs.json
+data/bot-activity.log
+
+# Logs
+*.log
+
+# Editor
+.vscode/
+.idea/
+.DS_Store
+
+# Build
+dist/
+coverage/
+
+# npm
+npm-debug.log
