@@ -28,6 +28,27 @@ function getCategory(desc) {
   return s.split(/\s+/)[0].toLowerCase();
 }
 
+// Prefer explicit one-letter code on the row, else fallback to first-word category from description
+function rowCategory(r) {
+  try {
+    const code = String(r.code || '').toLowerCase();
+    const known = new Set(['g','f','t','b','h','r','m','u']);
+    if (known.has(code)) return code;
+  } catch (_) {}
+  return getCategory(r.description);
+}
+
+// Map between single-letter codes and canonical names and a helper for synonym matching
+const CODE_TO_NAME = { g:'groceries', f:'food', t:'transport', b:'bills', h:'health', r:'rent', m:'misc', u:'uncategorized' };
+const NAME_TO_CODE = Object.fromEntries(Object.entries(CODE_TO_NAME).map(([k,v]) => [v, k]));
+function catSynonyms(c) {
+  const lc = String(c || '').toLowerCase();
+  const out = new Set([lc]);
+  if (CODE_TO_NAME[lc]) out.add(CODE_TO_NAME[lc]); // if code provided, add name
+  if (NAME_TO_CODE[lc]) out.add(NAME_TO_CODE[lc]); // if name provided, add code
+  return out;
+}
+
 function isoWeekInfo(d) {
   // Copy date, set to UTC Thursday of current week to get ISO week
   const date = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
@@ -161,7 +182,7 @@ function createApiApp({ store, config }) {
         count += 1;
         if (r.is_income) totalIncome += amt; else totalExpense += amt;
         if (r.currency) currencies.add(r.currency);
-        const cat = getCategory(r.description);
+  const cat = rowCategory(r);
         const targetMap = (r.is_income ? null : catTotals);
         if (targetMap) targetMap.set(cat, (targetMap.get(cat) || 0) + amt);
         const cur = (r.currency || "JOD").toUpperCase();
@@ -239,7 +260,7 @@ function createApiApp({ store, config }) {
       for (const r of rows) {
         if (r.code && String(r.code).toUpperCase() === "XFER") continue;
         if (r.is_income) continue; // exclude income from expense categories chart
-        const cat = getCategory(r.description);
+  const cat = rowCategory(r);
         totals.set(cat, (totals.get(cat) || 0) + (Number(r.amount) || 0));
       }
     }
@@ -253,13 +274,14 @@ function createApiApp({ store, config }) {
     if (!m) return res.status(400).json({ error: "month must be YYYY-MM" });
     const chatId = req.query.chatId ? String(req.query.chatId) : null;
     const category = req.query.category ? String(req.query.category).toLowerCase() : null;
+    const catSet = category ? catSynonyms(category) : null;
     const chatIds = chatId ? [chatId] : store.getDistinctChatIds();
     const totals = new Map(); // date -> amount
     for (const cid of chatIds) {
       const rows = store.getEntriesBetween(cid, m.startIso, m.endIso);
       for (const r of rows) {
         if (r.code && String(r.code).toUpperCase() === "XFER") continue;
-        if (category && getCategory(r.description) !== category) continue;
+        if (catSet && !catSet.has(rowCategory(r))) continue;
         const d = new Date(r.createdAt);
         if (Number.isNaN(d.getTime())) continue;
         const key = d.toISOString().slice(0, 10); // YYYY-MM-DD (UTC)
@@ -274,6 +296,7 @@ function createApiApp({ store, config }) {
   app.get("/api/weekly", requireAuth, (req, res) => {
     const chatId = req.query.chatId ? String(req.query.chatId) : null;
     const category = req.query.category ? String(req.query.category).toLowerCase() : null;
+    const catSet = category ? catSynonyms(category) : null;
     const chatIds = chatId ? [chatId] : store.getDistinctChatIds();
     let range;
     const mStr = req.query.month ? String(req.query.month) : "";
@@ -292,7 +315,7 @@ function createApiApp({ store, config }) {
     for (const cid of chatIds) {
       const rows = store.getEntriesBetween(cid, range.startIso, range.endIso);
       for (const r of rows) {
-        if (category && getCategory(r.description) !== category) continue;
+        if (catSet && !catSet.has(rowCategory(r))) continue;
         const d = new Date(r.createdAt);
         if (Number.isNaN(d.getTime())) continue;
         const { year, week } = isoWeekInfo(d);
@@ -331,6 +354,7 @@ function createApiApp({ store, config }) {
     const year = parseInt(String(req.query.year || new Date().getUTCFullYear()), 10);
     const chatId = req.query.chatId ? String(req.query.chatId) : null;
     const category = req.query.category ? String(req.query.category).toLowerCase() : null;
+    const catSet = category ? catSynonyms(category) : null;
     const chatIds = chatId ? [chatId] : store.getDistinctChatIds();
     const out = [];
     for (let m = 1; m <= 12; m++) {
@@ -340,7 +364,7 @@ function createApiApp({ store, config }) {
       for (const cid of chatIds) {
         const rows = store.getEntriesBetween(cid, start, end);
         for (const r of rows) {
-          if (category && getCategory(r.description) !== category) continue;
+          if (catSet && !catSet.has(rowCategory(r))) continue;
           sum += Number(r.amount) || 0;
         }
       }
@@ -612,15 +636,14 @@ function createApiApp({ store, config }) {
     const limit = Math.max(1, Math.min(1000, parseInt(String(req.query.limit || 100), 10)));
     const chatId = req.query.chatId ? String(req.query.chatId) : null;
     const category = req.query.category ? String(req.query.category).toLowerCase() : null;
+    const catSet = category ? catSynonyms(category) : null;
     const chatIds = chatId ? [chatId] : store.getDistinctChatIds();
     let rowsAll = [];
     for (const cid of chatIds) {
       const rows = store.getEntriesBetween(cid, m.startIso, m.endIso);
       rowsAll = rowsAll.concat(rows);
     }
-    if (category) {
-      rowsAll = rowsAll.filter((r) => getCategory(r.description) === category);
-    }
+    if (catSet) rowsAll = rowsAll.filter((r) => catSet.has(rowCategory(r)));
     rowsAll.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
     res.json({ month: `${m.year}-${String(m.month).padStart(2, "0")}`, data: rowsAll.slice(0, limit) });
   });
@@ -650,7 +673,8 @@ function createApiApp({ store, config }) {
       const rows = store.getEntriesBetween(cid, range.startIso, range.endIso);
       rowsAll = rowsAll.concat(rows);
     }
-    if (category) rowsAll = rowsAll.filter((r) => getCategory(r.description) === category);
+  const catSet = category ? catSynonyms(category) : null;
+  if (catSet) rowsAll = rowsAll.filter((r) => catSet.has(rowCategory(r)));
     rowsAll.sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
 
   const baseName = `ledger_${range.label}${chatId ? '_' + chatId : ''}${category ? '_' + category : ''}`;
@@ -727,16 +751,17 @@ function createApiApp({ store, config }) {
   // Mobile: minimal entry creation for quick-add
   app.post('/api/mobile/entry', requireAuth, express.json(), async (req, res) => {
     try {
-      const { amount, currency, description, createdAt, chatId } = req.body || {};
+  const { amount, currency, description, createdAt, chatId, code } = req.body || {};
       const amt = Number(amount);
       if (!Number.isFinite(amt)) return res.status(400).json({ error: 'amount required' });
       const desc = typeof description === 'string' ? description : '';
       if (!desc) return res.status(400).json({ error: 'description required' });
       const cur = (currency || 'JOD').toString().toUpperCase();
       const at = createdAt ? new Date(createdAt).toISOString() : new Date().toISOString();
-      const cid = chatId ? String(chatId) : (req.query.chatId ? String(req.query.chatId) : null);
-      const uid = cid || 'mobile';
-      const entry = { chatId: cid, userId: uid, code: 'F', amount: amt, currency: cur, description: desc, createdAt: at };
+      // Default to a stable "mobile" chat when not provided
+      const cid = chatId ? String(chatId) : (req.query.chatId ? String(req.query.chatId) : 'mobile');
+      const uid = 'mobile';
+  const entry = { chatId: cid, userId: uid, code: (code ? String(code).toUpperCase() : 'F'), amount: amt, currency: cur, description: desc, createdAt: at };
       const saved = await store.addEntry(entry);
       res.json({ ok: true, entry: saved || entry });
     } catch (e) {

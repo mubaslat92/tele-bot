@@ -59,12 +59,7 @@ async function main() {
     console.warn("TELEGRAM_BOT_TOKEN is missing; Telegram bot will not start. API/WhatsApp (if enabled) will still run.");
   }
 
-  if (config.dashboardEnabled) {
-    const api = createApiApp({ store, config });
-    api.listen(config.dashboardPort, () => {
-      console.log(`Dashboard API listening on http://0.0.0.0:${config.dashboardPort}`);
-    });
-  }
+  // Removed duplicate API startup to avoid listening twice on the same port
 
   if (config.whatsappEnabled) {
     const app = whatsappServer({ store, config });

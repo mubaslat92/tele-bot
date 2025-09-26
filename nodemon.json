@@ -1,0 +1,10 @@
+{
+  "watch": ["src"],
+  "ext": "js,json",
+  "ignore": [
+    "data/**",
+    "public/dashboard/**",
+    "dashboard-app/dist/**",
+    "reports/**"
+  ]
+}

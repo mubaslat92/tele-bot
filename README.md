@@ -270,3 +270,46 @@ If something fails
 ## Roadmap (dashboard)
 - Express API (`/api/summary`, `/api/by-category`, `/api/daily`, `/api/monthly`, `/api/entries`).
 - React + Vite dashboard (Tailwind + Recharts) served by the same Node app.
+
+## Release v1.1 (2025-09-27)
+
+This release brings a working mobile quick-add flow, consistent category handling across API/UI, and small dashboard fixes.
+
+What’s new
+- Mobile app (Flutter)
+  - Home screen: Summary cards, Top categories, Recent entries.
+  - Month-year picker dialog with editable year (tap the year to type), no day selection.
+  - Quick add bottom sheet with fields: Amount, Category dropdown (Groceries/Food/Transport/Bills/Health/Rent/Misc/Uncategorized), Description, Currency.
+  - Sends code separately (uppercase). Description is preserved exactly as typed.
+  - Improved error surfacing for failed saves.
+- Backend API
+  - New/updated endpoint: `POST /api/mobile/entry` accepts `{ chatId?, code?, amount, currency, description, createdAt? }`.
+    - Defaults `chatId` to `"mobile"` if not provided.
+    - Persists `code` as provided (uppercase). Transfers (`XFER`) and income codes are detected.
+  - Category derivation helper `rowCategory(r)`: prefers a known one-letter `code` (g/f/t/b/h/r/m/u); falls back to the first word of `description`.
+  - Category filtering now supports synonyms (code or name) across endpoints: `/api/entries`, `/api/daily`, `/api/weekly`, `/api/monthly`, `/api/export`.
+  - Dashboard continues to serve from `dashboard-app/dist` when present.
+- Dashboard (Vite/React)
+  - Recent entries now display category from saved `code` when available (fallback to first word of description).
+  - Category filters/time series match by code or name.
+
+How to run (Windows, dev)
+- Backend API + bot
+  - PowerShell:
+    - `cd C:\Users\hamza\Projects\telegram-ledger-bot`
+    - `npm install`
+    - `npm run dev`
+- Dashboard SPA
+  - Dev: `cd dashboard-app; npm install; npm run dev` → http://localhost:5173 (proxies to 8090)
+  - Build: `npm run build` and the server will auto-serve `dashboard-app/dist`.
+- Mobile app (Android emulator)
+  - Emulator can’t reach `localhost`. Use `10.0.2.2` to talk to your PC.
+  - PowerShell:
+    - `cd C:\Users\hamza\Projects\telegram-ledger-bot\mobile\ledger_mobile`
+    - `flutter devices` (confirm `emulator-5554`)
+    - `flutter run -d emulator-5554 --dart-define=API_BASE_URL=http://10.0.2.2:8090`
+  - Hot reload: press `r` in the Flutter terminal; hot restart: `R`.
+
+Notes
+- Existing older entries without a known letter `code` will still show category from description’s first word. You can edit entries or migrate if needed.
+- If you enable API auth via `DASHBOARD_AUTH_TOKEN`, pass the token from the mobile app as needed (Dio headers) and from the dashboard via the prompt.

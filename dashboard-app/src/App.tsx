@@ -175,9 +175,12 @@ export default function App() {
     return Math.abs(summary.totalExpense || 0) + Math.abs(summary.totalIncome || 0)
   }, [summary])
 
-  // Helper: category = first word of description (lowercased) or 'uncategorized'
-  const categoryOf = (desc?: string) => {
-    const s = String(desc || '').trim()
+  // Helper: category display: prefer code mapping when code is a known letter; else first word of description
+  const codeToName: Record<string,string> = { g:'groceries', f:'food', t:'transport', b:'bills', h:'health', r:'rent', m:'misc', u:'uncategorized' }
+  const displayCategory = (e: any) => {
+    const code = String(e?.code || '').toLowerCase()
+    if (codeToName[code]) return codeToName[code]
+    const s = String(e?.description || '').trim()
     if (!s) return 'uncategorized'
     return s.split(/\s+/)[0].toLowerCase()
   }
@@ -502,7 +505,7 @@ export default function App() {
                     <td className="p-2">{(e.createdAt || e.date || '').slice(0,10)}</td>
                     <td className="p-2">{e.description}</td>
                     <td className="p-2 text-right">{Number(e.amount).toFixed(2)}</td>
-                    <td className="p-2 capitalize">{categoryOf(e.description)}</td>
+                    <td className="p-2 capitalize">{displayCategory(e)}</td>
                   </tr>
                 ))}
               </tbody>
