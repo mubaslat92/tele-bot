@@ -17,16 +17,21 @@
     .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
     .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
     .hstack { display: flex; align-items: center; gap: 12px; }
+    .toolbar { flex-wrap: nowrap; }
     select, input[type="month"], input[type="text"] { background: #11183a; border: 1px solid #2a3154; color: #E6EDF3; padding: 8px 10px; border-radius: 8px; }
     .table { width: 100%; border-collapse: collapse; }
     .table th, .table td { padding: 8px; border-bottom: 1px solid #1f2335; }
+    .table td.desc { white-space: normal; }
+    .table-wrap { width: 100%; overflow-x: auto; }
+    .table { min-width: 720px; }
     .pill { background:#10394a; color:#6bd5ff; font-weight:600; padding:2px 8px; border-radius:999px; font-size:12px; }
     a { color: #6bd5ff; }
   .right { margin-left: auto; }
-  .btn { background:#1a224d; color:#E6EDF3; border:1px solid #2a3154; border-radius:8px; padding:6px 10px; cursor:pointer; }
+  .btn { background:#1a224d; color:#E6EDF3; border:1px solid #2a3154; border-radius:8px; padding:8px 12px; cursor:pointer; }
   .btn:hover { filter: brightness(1.1); }
   .iconbtn { background:transparent; border:none; cursor:pointer; font-size:16px; }
   .tooltip { text-decoration: dotted underline; cursor: help; }
+  canvas { width: 100% !important; height: auto; }
   /* modal */
   .modal { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display:none; align-items:center; justify-content:center; padding:20px; }
   .modal .panel { background:#0f1533; border:1px solid #1f2335; border-radius:10px; max-width:800px; width:100%; max-height:80vh; overflow:auto; padding:16px; }
@@ -42,6 +47,23 @@
   body.light .table th, body.light .table td { border-bottom-color:#eee; }
   body.light a { color:#005bbb; }
   body.light .modal .panel { background:#fff; border-color:#e6e6e6; }
+
+  /* responsive */
+  @media (max-width: 900px) {
+    .grid-3, .grid-2 { grid-template-columns: 1fr; }
+    .container { padding: 12px; }
+    header { padding: 12px; }
+    .toolbar { flex-wrap: wrap; gap: 8px; }
+    .table { min-width: 600px; }
+  }
+  @media (max-width: 600px) {
+    .container { padding: 10px; }
+    .hstack { gap: 8px; }
+    select, input[type="month"], input[type="text"] { padding: 6px 8px; }
+    .btn { padding: 6px 10px; }
+    #token { min-width: 180px !important; }
+    .table { min-width: 520px; }
+  }
   </style>
 </head>
 <body>
@@ -52,7 +74,7 @@
         <span class="muted">·</span>
         <span id="status" class="muted">Connecting…</span>
       </div>
-      <div class="hstack">
+      <div class="hstack toolbar">
         <button id="theme" title="Toggle theme">🌓</button>
         <label>Month</label>
         <button id="prev">◀</button>
@@ -89,18 +111,14 @@
           <strong title="Transfers are excluded; negatives are refunds">By category</strong>
           <span class="pill" id="currency">—</span>
         </div>
-        <div class="hstack" style="gap:8px;margin:8px 0;">
-          <label class="muted">Filter</label>
-          <select id="catFilter"><option value="">All</option></select>
-          <button id="clearFilter" class="right">Clear</button>
-        </div>
-        <canvas id="pie" height="200" title="Click a slice to filter"></canvas>
+        <canvas id="pie" height="200" title="Click a slice to filter table below"></canvas>
       </div>
       <div class="card">
         <strong title="Transfers are excluded; negatives are refunds">Daily totals</strong>
         <canvas id="line" height="200"></canvas>
         <div class="hstack" style="margin-top:12px; gap:16px; align-items:flex-start;">
-          <div style="flex:1;">
+          <!-- FX breakdown hidden per request -->
+          <div style="flex:1; display:none;">
             <div class="muted" style="margin-bottom:6px;">FX breakdown</div>
             <canvas id="fxpie" height="140"></canvas>
           </div>
@@ -116,12 +134,16 @@
       <div class="hstack" style="justify-content: space-between;">
         <strong title="Transfers are excluded from charts; negatives are refunds">Recent entries</strong>
         <div class="hstack">
+          <label class="muted" for="catFilter">Category</label>
+          <select id="catFilter" title="Filter table by category"><option value="">All</option></select>
+          <button id="clearFilter" class="btn" title="Clear category filter">Clear</button>
           <a id="reportLink" href="#" target="_blank" rel="noreferrer">Open monthly report</a>
             <button id="uncatBtn" class="btn" title="Resolve uncategorized entries">Uncategorized</button>
             <button id="suggestionsBtn" class="btn" title="Review OCR suggestions">Suggestions</button>
           <button id="exportCsv">Export CSV</button>
         </div>
       </div>
+      <div class="table-wrap">
       <table class="table" id="entries">
         <thead>
           <tr><th>Date</th><th>Code</th><th>Description</th><th>Cur</th><th style="text-align:right;" title="Negative amounts are refunds">Amount</th><th>Actions</th></tr>
@@ -136,6 +158,7 @@
         </thead>
         <tbody></tbody>
       </table>
+      </div>
     </div>
   </div>
 
@@ -248,18 +271,12 @@
       qs('#topcat').textContent = summary.topCategory || '—';
       qs('#currency').textContent = summary.currency || '—';
 
-      // FX breakdown pie
+      // FX breakdown pie (disabled)
       try {
-        const fx = summary.fx || [];
-        const fxl = fx.map(x => x.currency);
-        const fxd = fx.map(x => x.amount);
-        const fxColors = fxl.map((_, i) => `hsl(${(i * 73) % 360} 65% 50%)`);
-        if (fxChart) fxChart.destroy();
-        const fxCtx = qs('#fxpie');
-        fxChart = new Chart(fxCtx, { type: 'doughnut', data: { labels: fxl, datasets: [{ data: fxd, backgroundColor: fxColors }] }, options: { plugins: { legend: { labels: { color: getComputedStyle(document.body).color } } } } });
+        // intentionally disabled
       } catch (_) {}
 
-      // Pie chart
+  // Pie chart
       const pieCtx = qs('#pie');
       const labels = byCat.data.map(x => x.category);
       const data = byCat.data.map(x => x.amount);
@@ -276,14 +293,16 @@
               const idx = points[0].index;
               const cat = labels[idx];
               catFilter.value = cat;
-              load().catch(err => statusEl.textContent = err.message);
+              renderEntries();
             }
           }
         }
       });
 
-      // Category filter dropdown options
-      catFilter.innerHTML = '<option value="">All</option>' + labels.map(c => `<option value="${c}">${c}</option>`).join('');
+  // Category filter dropdown options (preserve selection)
+  const prevCat = catFilter.value || '';
+  catFilter.innerHTML = '<option value="">All</option>' + labels.map(c => `<option value="${c}">${c}</option>`).join('');
+  if (prevCat && labels.includes(prevCat)) { catFilter.value = prevCat; }
 
       // Timeseries chart (Daily/Weekly/Monthly/Yearly)
       const lineCtx = qs('#line');
@@ -371,7 +390,10 @@
       const codeQ = fCode()?.value?.trim().toLowerCase() || '';
       const descQ = fDesc()?.value?.trim().toLowerCase() || '';
       const curQ = fCur()?.value?.trim().toLowerCase() || '';
+      const catSel = (catFilter.value || '').toLowerCase();
+      const getCat = (d) => (String(d||'').trim().split(/\s+/)[0] || '').toLowerCase();
       return entriesData.filter(e => (
+        (!catSel || getCat(e.description) === catSel) &&
         (!codeQ || String(e.code||'').toLowerCase().includes(codeQ)) &&
         (!descQ || String(e.description||'').toLowerCase().includes(descQ)) &&
         (!curQ || String(e.currency||'').toLowerCase().includes(curQ))
@@ -425,7 +447,7 @@
         const date = new Date(e.createdAt).toISOString().slice(0, 10);
         const tdDate = document.createElement('td'); tdDate.textContent = date; tr.appendChild(tdDate);
         const tdCode = document.createElement('td'); tdCode.textContent = e.code || ''; tr.appendChild(tdCode); attachEditable(tdCode, 'code', e);
-        const tdDesc = document.createElement('td'); tdDesc.textContent = e.description || ''; tr.appendChild(tdDesc); attachEditable(tdDesc, 'description', e);
+  const tdDesc = document.createElement('td'); tdDesc.className = 'desc'; tdDesc.textContent = e.description || ''; tr.appendChild(tdDesc); attachEditable(tdDesc, 'description', e);
         const tdCur = document.createElement('td'); tdCur.textContent = e.currency || ''; tr.appendChild(tdCur); attachEditable(tdCur, 'currency', e);
         const tdAmt = document.createElement('td'); tdAmt.style.textAlign = 'right'; tdAmt.textContent = fmt(e.amount); tr.appendChild(tdAmt);
         const tdAct = document.createElement('td');
@@ -512,8 +534,8 @@
     nextBtn.addEventListener('click', () => shiftMonth(+1));
     monthInput.addEventListener('change', () => load().catch(err => statusEl.textContent = err.message));
     chatSel.addEventListener('change', () => load().catch(err => statusEl.textContent = err.message));
-    catFilter.addEventListener('change', () => load().catch(err => statusEl.textContent = err.message));
-    clearFilterBtn.addEventListener('click', () => { catFilter.value = ''; load().catch(err => statusEl.textContent = err.message); });
+  catFilter.addEventListener('change', () => { try { renderEntries(); } catch (err) { statusEl.textContent = err.message; } });
+  clearFilterBtn.addEventListener('click', () => { catFilter.value = ''; try { renderEntries(); } catch (err) { statusEl.textContent = err.message; } });
     themeBtn.addEventListener('click', () => {
       document.body.classList.toggle('light');
       localStorage.setItem('dash_theme', document.body.classList.contains('light') ? 'light' : 'dark');

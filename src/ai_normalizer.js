@@ -36,11 +36,11 @@ function buildPrompt(token) {
 async function aiNormalize({ token, config }) {
   const lower = token.toLowerCase();
   if (!lower || isKnownDescriptionRoot(lower)) return null; // already known or empty
-  // Load disk structures lazily
+  // Load disk structures lazily and always reload aliases to pick up recent /alias commands
   if (!DISK_CACHE && config.aiCachePath) DISK_CACHE = AICache.load(config.aiCachePath);
-  if (!ALIASES && config.aliasesPath) ALIASES = AliasStore.load(config.aliasesPath);
+  if (config.aliasesPath) ALIASES = AliasStore.load(config.aliasesPath);
 
-  // Manual alias wins first
+  // Manual alias wins first (reloaded above)
   const aliasHit = ALIASES?.get(lower);
   if (aliasHit) return aliasHit;
 
@@ -131,4 +131,4 @@ async function normalizeUnknownDescriptionFirstWord(description, config) {
   return description;
 }
 
-module.exports = { normalizeUnknownDescriptionFirstWord };
+module.exports = { normalizeUnknownDescriptionFirstWord, aiNormalize };

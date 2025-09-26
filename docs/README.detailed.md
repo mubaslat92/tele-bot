@@ -1,4 +1,4 @@
-# Telegram Ledger Bot — Detailed Notes (Updated 2025‑09‑25)
+# Telegram Ledger Bot — Detailed Notes (Updated 2025‑09‑26)
 
 ## 1) Goals
 - Log expenses from chat with minimal typing.
@@ -10,17 +10,19 @@
 ## 2) Message standard
 
 Supported formats:
-- Code-first: `CODE AMOUNT [CURRENCY] [description]`
-- Amount-first: `AMOUNT [CURRENCY] [description]` → code is `DEFAULT_AMOUNT_FIRST_CODE` (or `MISC`)
+- Parser v2 (recommended): natural phrases where the first word is a category from a fixed set.
+   - Categories: groceries (g), food (f), transport (t), bills (b), health (h), rent (r), misc (m), and uncategorized (u)
+   - Examples: `60 g apples`, `75 usd t taxi`, `b 45 wtr bill`
+- Classic: `CODE AMOUNT [CURRENCY] [description]` or amount-first using default code.
 
 Constraints:
 - One transaction per message. If multiple amounts or connectors `or/and` appear, the bot asks to split.
 
 Examples:
-- `F 100 elc` → `F 100 JOD - electricity`
-- `RENT 250 JOD flat in Amman`
-- `60 grcs` → default code + `groceries`
-- `75 elektr` → default code + `electricity` (AI if not known)
+- `60 g apples` → groceries 60 JOD - apples
+- `75 usd t taxi` → transport 75 USD - taxi
+- `b 45 wtr bill` → bills 45 JOD - water bill
+- Classic: `F 100 elc`, `RENT 250 JOD flat in Amman`
 
 ## 3) Parsing and normalization pipeline
 1) Detect format (code-first or amount-first).
@@ -30,15 +32,17 @@ Examples:
    - Built-ins (elc→electricity, wat/wtr→water, int/net→internet, hst→hosting, foo→food, …)
    - Aliases from `data/aliases.json` (persistent, up to ~1000)
    - Optional AI fallback via Ollama; result cached to `data/ai_cache.json`
-4) Amount-first assigns code from `DEFAULT_AMOUNT_FIRST_CODE` (fallback `MISC`).
+4) Amount-first assigns code from `DEFAULT_AMOUNT_FIRST_CODE` (fallback `MISC`). Under Parser v2, unknown first tokens are prefixed with `uncategorized` to keep category integrity.
 5) Guard combined messages; prompt to split.
 
-## 4) AI normalizer (optional, local, free)
-- Provider: Ollama; Model: `phi3:mini` (~2–4 GB disk).
-- Triggered only when the first description token isn’t known.
-- Low-temp, short output mapping to canonical labels:
-  - `electricity, water, rent, tax, fuel, groceries, internet, hosting, insurance, salary, fees, supplies, maintenance`
-- Writes learned mappings to `data/ai_cache.json`.
+## 4) Parser versions and AI (optional)
+- Switch parser via `.env`: set `PARSER_VERSION=v2` (recommended) or `v1` (classic).
+- In v2, the first description token is normalized to the canonical set; unknowns become `uncategorized`.
+- AI normalizer (optional, local, free):
+   - Provider: Ollama; Model: `phi3:mini` (~2–4 GB disk).
+   - Triggered only when the first description token isn’t known.
+   - Low-temp, short output mapping to canonical labels.
+   - Writes learned mappings to `data/ai_cache.json`.
 
 Install notes:
 ```powershell
@@ -70,10 +74,15 @@ Invoke-RestMethod -UseBasicParsing -Uri http://localhost:11434/api/tags
 - Ollama model: ~2–4 GB.
 - Plan ~3–5 GB total with one local model.
 
-## 9) Dashboard roadmap
+## 9) Dashboard updates
 - Express API: `/api/summary`, `/api/by-category`, `/api/daily`, `/api/monthly`, `/api/entries`.
 - React + Vite + Tailwind + Recharts UI, served by the same Node process.
-- Bearer token auth via `.env`.
+- SPA improvements:
+   - Category suggestions (sorted by biggest totals), keyboard nav, clear, localStorage persistence.
+   - Recent Entries table shows Category (derived from description’s first word) instead of Code.
+   - Avg Out/Day card added.
+   - FX breakdown hidden for now.
+— Bearer token auth via `.env`.
 
 ## 10) Setup recap
 ```powershell
@@ -81,6 +90,10 @@ cd C:\Users\hamza\Projects\telegram-ledger-bot
 npm install
 
 # .env: set TELEGRAM_BOT_TOKEN and desired defaults
+# Switch to Parser v2 and enable dashboard
+# PARSER_VERSION=v2
+# DASHBOARD_ENABLED=true
+# DASHBOARD_PORT=8090
 # Optional local AI:
 ollama pull phi3:mini
 # .env:
@@ -92,6 +105,13 @@ npm run start
 ```
 
 ---
+
+## Recent changes (2025-09-26)
+
+- Fixed taxonomy: canonical categories enforced at the first description token (g/f/t/b/h/r/m and u for uncategorized).
+- Parser v2 (natural phrases) enabled via `PARSER_VERSION=v2`.
+- Migration script to normalize historical entries: `node scripts/migrate_categories.js [--dry] [--chat <chatId>]` (auto backup in `data/`).
+- Dashboard SPA updates: category suggestions, Avg Out/Day, FX off, Recent Entries shows Category.
 
 ## Recent changes (2025-09-25)
 
@@ -145,3 +165,47 @@ If you want, I can add example screenshots or an exportable test job file you ca
 - Natural-language `/report this month` is not accepted; use `/report` or `/report YYYY-MM`.
 - First AI call after a reboot can be slower (model warm-up).
 - Amount-first uses a single default code; use code-first when you need a specific code.
+
+## 12) Forecasting and anomaly detection (planned)
+
+Goal: provide simple, explainable insights that help anticipate spend and catch mistakes early.
+
+What you’ll get:
+- Forecast next month’s spending per category (and overall) with confidence bands.
+- Highlight “out of pattern” spikes (e.g., electricity bill doubled) on charts and in a small inbox.
+
+Data prep
+- Aggregate entries by category and calendar month in base currency (JOD). If multi-currency is enabled, convert with end-of-month FX.
+- Require a minimum history window: 6 months for linear regression; 12 months recommended for seasonal models.
+
+Methods
+- Linear regression (LR): fit y = a + b·t on monthly totals per category where t is month index; predict t_next.
+   - Pros: fast, robust for monotonic trends; Cons: ignores seasonality.
+   - Confidence: use residual standard deviation to produce 80%/95% bands.
+- Holt–Winters (additive) triple exponential smoothing (HW): level, trend, and seasonality with period m = 12 for monthly data.
+   - Pros: captures seasonality; Cons: needs ≥2 seasons of data to stabilize.
+   - Parameter selection: light grid search on α, β, γ to minimize SSE; fallback to sane defaults (0.2/0.1/0.2) if data is sparse.
+- Fallbacks: if <6 months, return “insufficient history” and skip forecast for that category.
+
+Anomaly detection
+- Residual z-score: compare actual monthly totals to seasonal baseline. Flag if |z| ≥ 3 (configurable) or if change ≥ 2× median for utilities-like categories.
+- STL + MAD (optional): seasonally decompose and flag if |residual| > k·MAD (k default 3.5).
+- Domain rules: never flag RENT unless it changes; highlight BILLS spikes > 1.8× trailing 6-month median; ignore months with known holidays if configured.
+
+Surface in the dashboard (UI)
+- Time series: draw forecast point for next month with a dashed line and shaded CI band; anomalies get a red dot + tooltip.
+- Cards: “Next month forecast” by category with delta vs last month.
+- Inbox: a compact “Anomalies” list with category, month, actual vs expected, and a quick note reason (z-score, rule triggered).
+
+Planned API endpoints (subject to change)
+- GET `/api/forecast?period=monthly&h=1&category=g` → { method: "hw"|"lr", forecast, ci80, ci95, history }
+- GET `/api/anomalies?period=monthly&window=12&category=all` → [{ category, month, actual, expected, z, method }]
+
+Configuration
+- Feature flags: `FORECASTING_ENABLED=true`, `ANOMALY_DETECTION_ENABLED=true`.
+- Tuning: `FORECAST_METHOD=hw|lr|auto`, `FORECAST_MIN_MONTHS=6`, `ANOMALY_Z=3.0`, `ANOMALY_WINDOW=12`.
+
+Notes
+- Keep models simple and transparent. Prefer explainability over black-box accuracy.
+- Start with monthly granularity; extend to weekly later if needed (seasonal period m=52).
+- If history is sparse or highly volatile, suppress forecasts rather than showing misleading numbers.

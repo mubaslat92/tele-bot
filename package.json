@@ -5,7 +5,9 @@
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
-    "dev": "nodemon src/index.js"
+    "dev": "nodemon src/index.js",
+    "migrate:cats": "node scripts/migrate_categories.js",
+    "worker:once": "node scripts/process_pending_jobs.js"
   },
   "keywords": [
     "telegram",
@@ -23,6 +25,8 @@
     "express": "^5.1.0",
     "node-cron": "^3.0.3",
     "sql.js": "^1.13.0",
+    "pdf-parse": "^1.1.1",
+    "sharp": "^0.33.5",
     "telegraf": "^4.16.3",
     "tesseract.js": "^6.0.1"
   },

@@ -4,9 +4,10 @@ const dayjs = require("dayjs");
 const utc = require("dayjs/plugin/utc");
 const timezone = require("dayjs/plugin/timezone");
 const { generateMonthlyReport } = require("./report");
-const { parseLedgerMessage, normalizeDescription } = require("./shared/parse");
+const { parseLedgerMessage, normalizeDescription, isKnownDescriptionRoot } = require("./shared/parse");
+const { parseV2 } = require("./shared/parse_v2");
 const { getCodeLabel } = require("./shared/codes");
-const { normalizeUnknownDescriptionFirstWord } = require("./ai_normalizer");
+const { normalizeUnknownDescriptionFirstWord, aiNormalize } = require("./ai_normalizer");
 const { AliasStore, AICache } = require("./shared/aliases");
 
 dayjs.extend(utc);
@@ -54,19 +55,37 @@ const registerCommands = async (bot) => {
   ]);
 };
 
-const buildHelpMessage = () => {
-  return [
+const buildHelpMessage = (config) => {
+  const lines = [
     "Send transactions like:",
-    "  F 100 elc",
-    "  RENT 250 JOD flat in Amman",
-    "Income examples: SAL 1000 salary, INC 50 cashback",
-    "Structure: CODE AMOUNT [CURRENCY] [description]",
-    "Negative amounts are refunds (e.g., F -20 return)",
+  ];
+  if ((config?.parserVersion || 'v1') === 'v2') {
+    lines.push(
+      "  60 g apples  (g = groceries)",
+      "  75 usd t taxi  (t = transport)",
+      "  b 45 jod electricity bill  (b = bills)",
+      "  h 30 pharmacy meds  (h = health)",
+      "  r 250 flat  (r = rent)",
+      "  m 20 gift  (m = misc)",
+      "If you write words, I'll map them to these 7 categories: g/f/t/b/h/r/m and u (uncategorized).",
+      "Tip: One transaction per message."
+    );
+  } else {
+    lines.push(
+      "  F 100 elc",
+      "  RENT 250 JOD flat in Amman",
+      "Income examples: SAL 1000 salary, INC 50 cashback",
+      "Structure: CODE AMOUNT [CURRENCY] [description]",
+      "Negative amounts are refunds (e.g., F -20 return)"
+    );
+  }
+  lines.push(
     "Commands:",
     "/report - current month",
     "/report 2025-01 - specific month",
     "/undo - remove your last entry",
-  ].join("\n");
+  );
+  return lines.join("\n");
 };
 
 const createBot = ({ config, store }) => {
@@ -88,9 +107,12 @@ const createBot = ({ config, store }) => {
       return 0;
     }
   };
-  // Initialize persistent stores
-  const aliasStore = AliasStore.load(config.aliasesPath);
+  // Initialize persistent stores (AI cache kept in memory, aliases will be loaded per-message to pick up edits)
   const aiCache = AICache.load(config.aiCachePath);
+  // transient conversation state to capture replacement words from users { userId -> { entryId, token } }
+  const pendingAliasResponses = new Map();
+  // transient teach requests for amount-first unknown tokens: { userId -> { parsed, token, createdAt, chatId } }
+  const pendingTeachRequests = new Map();
   const START_TS = Math.floor(Date.now() / 1000);
   const isOld = (ctx) => {
     const ts = ctx.message?.date ?? ctx.update?.message?.date;
@@ -126,7 +148,7 @@ const createBot = ({ config, store }) => {
       return ctx.reply("Access denied.");
     }
 
-    return ctx.reply("Welcome to the ledger bot!\n\n" + buildHelpMessage());
+    return ctx.reply("Welcome to the ledger bot!\n\n" + buildHelpMessage(config));
   });
 
   bot.help((ctx) => {
@@ -134,7 +156,7 @@ const createBot = ({ config, store }) => {
       return ctx.reply("Access denied.");
     }
 
-    return ctx.reply(buildHelpMessage());
+    return ctx.reply(buildHelpMessage(config));
   });
 
   bot.command("report", async (ctx) => {
@@ -239,8 +261,15 @@ const createBot = ({ config, store }) => {
     if (!/^[a-z ]{3,40}$/.test(canonical)) {
       return ctx.reply("Canonical must be words only (3-40 chars).");
     }
-    aliasStore.set(shorthand, canonical);
-    return ctx.reply(`Alias saved: ${shorthand} -> ${canonical}`);
+  // persist alias to disk so it takes effect immediately for future messages
+    try {
+      const store = AliasStore.load(config.aliasesPath);
+      store.set(shorthand, canonical);
+  return ctx.reply(`Alias saved: ${shorthand} -> ${canonical}\nTip: For categories, prefer one of g/f/t/b/h/r/m/u as the first word.`);
+    } catch (e) {
+      console.error('Failed to save alias', e);
+      return ctx.reply('Failed to save alias.');
+    }
   });
 
   bot.on("text", async (ctx) => {
@@ -255,6 +284,53 @@ const createBot = ({ config, store }) => {
       return ctx.reply("Missing chat context");
     }
 
+    // If this user was asked to provide a replacement for a token, capture it here
+    try {
+      if (pendingAliasResponses.has(userId)) {
+        const state = pendingAliasResponses.get(userId);
+        pendingAliasResponses.delete(userId);
+        const replacement = (ctx.message?.text || '').trim().toLowerCase();
+        if (!replacement) return ctx.reply('Replacement must be a non-empty word.');
+        try {
+          const storeAlias = AliasStore.load(config.aliasesPath);
+          storeAlias.set(state.token, replacement);
+
+          if (state.entryId) {
+            // update the entry description to use replacement
+            const entry = store.getEntryById(state.entryId);
+            if (entry) {
+              const parts = (entry.description || '').split(/\s+/);
+              parts[0] = replacement;
+              await store.updateEntryById(entry.id, { description: parts.join(' ') });
+              // show recorded line to confirm save
+              try {
+                const updated = store.getEntryById(entry.id) || entry;
+                await ctx.reply(formatEntryLine(updated, config.timezone));
+              } catch (_) {}
+            }
+          } else if (state.parsed) {
+            // state carries parsed message info (teach flow) — create the entry with replacement
+            const p = state.parsed;
+            const createdAt = state.createdAt || new Date().toISOString();
+            const descParts = (p.description || '').split(/\s+/);
+            descParts[0] = replacement;
+            const description = descParts.join(' ');
+            const entry = await store.addEntry({ chatId: state.chatId, userId, code: p.code, amount: p.amount, currency: p.currency || config.defaultCurrency, description, createdAt });
+            // notify in chat
+            try { await ctx.telegram.sendMessage(entry.chatId, formatEntryLine(entry, config.timezone)); } catch (_) {}
+          }
+
+          await ctx.reply(`Saved alias ${state.token} -> ${replacement}`);
+        } catch (e) {
+          console.error('Failed to save replacement alias', e);
+          await ctx.reply('Failed to save alias.');
+        }
+        return;
+      }
+    } catch (e) {
+      console.error('Error handling pending alias response', e);
+    }
+
     const text = ctx.message.text || "";
     // Gentle guard: if message seems to contain multiple transactions, ask to split
     const sepHint = /(\bor\b|\band\b|;|,)/i.test(text);
@@ -263,27 +339,133 @@ const createBot = ({ config, store }) => {
       return ctx.reply("Please send one transaction per message (I detected multiple amounts). Example: 'F 100 elc' then 'RENT 250 JOD flat in Amman'.");
     }
 
-  const parsed = parseLedgerMessage(text, { amountFirstCode: config.defaultAmountFirstCode });
-    if (parsed.error) {
-      return ctx.reply(parsed.error);
+    let parsed;
+    if ((config.parserVersion || 'v1') === 'v2') {
+  parsed = parseV2(text, { aliasesPath: config.aliasesPath });
+      if (!parsed || parsed.error) {
+        return ctx.reply(parsed?.error || 'Could not parse your message. Please include an amount.');
+      }
+      if (parsed.amount == null || Number.isNaN(Number(parsed.amount))) {
+        return ctx.reply('Please include an amount (e.g., 60, 75 usd fuel, spent 40 on lunch).');
+      }
+      // Defaults for code/currency under v2
+      let code = parsed.code || null;
+      const beginsWithAmount = /^\s*[+-]?\d/.test(text);
+      if (!code) {
+        if (beginsWithAmount) {
+          code = config.defaultAmountFirstCode || 'MISC';
+        } else if (Number(parsed.amount) < 0) {
+          code = 'F';
+        } else {
+          code = 'F';
+        }
+      }
+      parsed.code = code;
+    } else {
+      parsed = parseLedgerMessage(text, { amountFirstCode: config.defaultAmountFirstCode });
+      if (parsed.error) {
+        return ctx.reply(parsed.error);
+      }
     }
 
     const createdAt = dayjs().utc().toISOString();
     const currency = parsed.currency || config.defaultCurrency;
     let description = normalizeDescription(parsed.description);
+  // If this message used the amount-first pattern and the first description token is unknown,
+    // prompt the user to teach the new word instead of immediately recording MISC.
+  const rawFirstToken = (parsed.rawFirst || (text.trim().split(/\s+/)[0] || '').toString()).toLowerCase();
+    const messageIsAmountFirst = /^\s*\d/.test(text);
+    const descPartsCheck = (parsed.description || '').split(/\s+/);
+    const descFirstCheck = (descPartsCheck[0] || '').toLowerCase();
+    let aliasForDescFirst = null;
+    try { aliasForDescFirst = AliasStore.load(config.aliasesPath).get(descFirstCheck); } catch (_) { aliasForDescFirst = null; }
+  if (messageIsAmountFirst && !aliasForDescFirst && !isKnownDescriptionRoot(descFirstCheck) && descFirstCheck && descFirstCheck !== 'uncategorized') {
+      // Create a temporary entry and ask the user whether they'd like to teach this new word
+      try {
+        const tempEntry = await store.addEntry({
+          chatId,
+          userId,
+          code: parsed.code,
+          amount: parsed.amount,
+          currency,
+          description: parsed.description,
+          createdAt,
+        });
+
+        const keyboard = { reply_markup: { inline_keyboard: [[
+          { text: `Teach '${descFirstCheck}'`, callback_data: `alias:teach:yes:${tempEntry.id}:${descFirstCheck}` },
+          { text: `Save as-is ('${descFirstCheck}')`, callback_data: `alias:teach:no:${tempEntry.id}:${descFirstCheck}` },
+        ]] } };
+        await ctx.reply(`I don't recognize '${descFirstCheck}'. Would you like to teach what it means?`, keyboard);
+        return; // wait for callback to handle teach/save decisions
+      } catch (e) {
+        console.error('Failed to prompt teach flow', e);
+      }
+    }
     // Apply manual alias on first token before AI
     const descParts = (description || "").split(/\s+/);
     const firstToken = (descParts[0] || "").toLowerCase();
-    const alias = aliasStore.get(firstToken);
-    if (alias) {
-      descParts[0] = alias;
-      description = descParts.join(" ");
+    // load aliases from disk each message so edits take effect without restarting
+    let aliasApplied = false;
+    try {
+      const alias = AliasStore.load(config.aliasesPath).get(firstToken);
+      if (alias) {
+        descParts[0] = alias;
+        description = descParts.join(" ");
+        aliasApplied = true;
+      }
+    } catch (_) {}
+    // Optionally call AI normalizer only when no manual alias was applied
+    let aiMapped = null;
+    if (config.aiNormalizerEnabled && !aliasApplied) {
+      // call aiNormalize directly on the first token so we can prompt the user interactively
+      try {
+        aiMapped = await aiNormalize({ token: firstToken, config });
+      } catch (e) { aiMapped = null; }
+      if (aiMapped && aiMapped !== firstToken) {
+        // propose the mapping to the user before finalizing
+        // set the proposed description but hold off on persisting alias until user confirms
+        const proposedParts = [...descParts];
+        proposedParts[0] = aiMapped;
+        const proposedDesc = proposedParts.join(' ');
+        description = proposedDesc;
+        // create the entry but mark as pending suggestion by writing a suggestion row
+        const entry = await store.addEntry({
+          chatId,
+          userId,
+          code: parsed.code,
+          amount: parsed.amount,
+          currency,
+          description,
+          createdAt,
+        });
+        // Ask user to confirm mapping via inline buttons
+        try {
+          const keyboard = {
+            reply_markup: {
+              inline_keyboard: [
+                [
+                  { text: `Yes — keep '${aiMapped}'`, callback_data: `alias:yes:${entry.id}:${firstToken}:${aiMapped}` },
+                  { text: `No — I'll provide`, callback_data: `alias:no:${entry.id}:${firstToken}:${aiMapped}` },
+                ],
+              ],
+            },
+          };
+          await ctx.reply(
+            `I suggested '${aiMapped}' for '${firstToken}'. Is that correct?`,
+            keyboard,
+          );
+          return; // done — wait for callback
+        } catch (e) {
+          // fallback: if inline keyboard fails, just save and continue
+          console.error('Failed to send alias confirmation keyboard', e);
+        }
+      } else {
+        // no ai suggestion, proceed with original description
+        description = await normalizeUnknownDescriptionFirstWord(description, config) || description;
+      }
     }
-    // Optionally call AI normalizer if still unknown shorthand
-    if (config.aiNormalizerEnabled) {
-      description = await normalizeUnknownDescriptionFirstWord(description, config) || description;
-    }
-
+    // If we didn't early-return for an AI confirmation flow above, add entry normally
     const entry = await store.addEntry({
       chatId,
       userId,
@@ -397,6 +579,40 @@ const createBot = ({ config, store }) => {
   return ctx.reply(`Saved attachment (entry id ${entry.id}). Queue length: ${pendingLen}. OCR will be processed shortly.`);
   });
 
+  // Document handler: accept PDFs or image files sent as documents; queue OCR job
+  bot.on('document', async (ctx) => {
+    if (isOld(ctx)) return;
+    if (!ensureAuth(config.allowedUserIds, ctx)) return ctx.reply('Access denied.');
+    const chatId = ctx.chat?.id?.toString();
+    const userId = ctx.from?.id?.toString();
+    if (!chatId || !userId) return ctx.reply('Missing chat context');
+    const doc = ctx.message.document;
+    if (!doc) return ctx.reply('No document found');
+    const fileId = doc.file_id;
+    const mime = doc.mime_type || '';
+    const caption = ctx.message.caption || '';
+    const isInvoice = /invoice|bill|receipt/i.test(caption) || /invoice|bill/i.test(doc.file_name || '');
+    // Accept only images and PDFs here
+    if (!/^image\//i.test(mime) && !/pdf$/i.test(mime) && !/\.pdf$/i.test(doc.file_name || '')) {
+      return ctx.reply('Unsupported document type. Please send an image or PDF.');
+    }
+    const now = new Date().toISOString();
+    const entry = await store.addEntry({
+      chatId,
+      userId,
+      code: isInvoice ? 'INV' : 'RCPT',
+      amount: 0,
+      currency: config.defaultCurrency,
+      description: caption || (isInvoice ? 'invoice' : 'receipt'),
+      createdAt: now,
+      attachmentPath: fileId,
+      ocrText: null,
+      isInvoice: isInvoice,
+    });
+    const pendingLen = pushPendingJob({ type: isInvoice ? 'invoice_ocr' : 'receipt_ocr', chatId, fileId, entryId: entry.id, createdAt: now });
+    return ctx.reply(`Saved document (entry id ${entry.id}). Queue length: ${pendingLen}. OCR will be processed shortly.`);
+  });
+
   // Voice handler: store voice message and queue transcription
   bot.on('voice', async (ctx) => {
     if (isOld(ctx)) return;
@@ -440,9 +656,85 @@ const createBot = ({ config, store }) => {
     return undefined;
   });
 
+    // Handle inline button callbacks for alias confirmation
+    bot.on('callback_query', async (ctx) => {
+      const data = ctx.callbackQuery?.data || '';
+      if (!data.startsWith('alias:')) return ctx.answerCbQuery();
+      const parts = data.split(':');
+      // format: alias:yes|no:entryId:token:aiMapped
+      const action = parts[1];
+      const entryId = Number(parts[2]);
+      const token = parts[3];
+      const aiMapped = parts.slice(4).join(':');
+      try {
+        if (action === 'yes') {
+          // Persist alias and acknowledge
+          const storeAlias = AliasStore.load(config.aliasesPath);
+          storeAlias.set(token, aiMapped);
+          // Optionally, update entry description to use canonical token (already set earlier)
+          await store.persist();
+          await ctx.answerCbQuery({ text: `Saved alias ${token} -> ${aiMapped}` });
+          await ctx.editMessageText(`Confirmed and saved: '${aiMapped}' for '${token}'.`);
+          try {
+            const updatedEntry = store.getEntryById(entryId);
+            if (updatedEntry) {
+              await ctx.telegram.sendMessage(updatedEntry.chatId, formatEntryLine(updatedEntry, config.timezone));
+            }
+          } catch (_) {}
+          return;
+        }
+        if (action === 'no') {
+          // Ask user to send replacement token as a message. Store pending state keyed by user id
+          const userId = ctx.from?.id?.toString();
+          if (!userId) return ctx.answerCbQuery({ text: 'Unable to capture response.' });
+          pendingAliasResponses.set(userId, { entryId, token });
+          await ctx.answerCbQuery({ text: 'Please type the replacement word now.' });
+          await ctx.editMessageText(`Please type the replacement word for '${token}'.`);
+          return;
+        }
+        // Teach flow callbacks: alias:teach:yes|no:entryId:token
+        if (action === 'teach') {
+          const teachDecision = parts[2];
+          const teachEntryId = Number(parts[3]);
+          const teachToken = parts.slice(4).join(':');
+          const userId = ctx.from?.id?.toString();
+          if (!userId) return ctx.answerCbQuery({ text: 'Unable to capture response.' });
+          if (teachDecision === 'yes') {
+            // Ask the user to type the canonical word; store a pending state that includes parsed snapshot
+            // The pendingAliasResponses handler will accept state.parsed to create the entry after replacement
+            // We can't serialize the parsed message here without the full message context; instead ask the user to re-send a single-word replacement
+            pendingAliasResponses.set(userId, { entryId: teachEntryId, token: teachToken });
+            await ctx.answerCbQuery({ text: `Please type the canonical word for '${teachToken}' now.` });
+            await ctx.editMessageText(`Please type the canonical word for '${teachToken}' now.`);
+            return;
+          }
+          if (teachDecision === 'no') {
+            // User chose to save as-is — create an entry with code MISC (or default amount-first code)
+            try {
+              // We already created the entry as-is; simply acknowledge and keep the record unchanged.
+              await ctx.answerCbQuery({ text: `Saved as-is. You can still use /alias to teach '${teachToken}' later.` });
+              await ctx.editMessageText(`Saved as-is. You can still use /alias to teach '${teachToken}' later.`);
+              // Also show the recorded line so the user sees confirmation
+              try {
+                const saved = store.getEntryById(teachEntryId);
+                if (saved) {
+                  await ctx.reply(formatEntryLine(saved, config.timezone));
+                }
+              } catch (_) {}
+            } catch (_) {}
+            return;
+          }
+        }
+      } catch (e) {
+        console.error('Failed to handle alias callback', e);
+        try { await ctx.answerCbQuery({ text: 'Failed to process response' }); } catch (_) {}
+      }
+    });
+
+    
+
   return bot;
 };
-
 module.exports = {
   createBot,
 };

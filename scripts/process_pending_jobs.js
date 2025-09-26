@@ -49,11 +49,29 @@ async function downloadTelegramFile(token, fileId, destPath) {
   return destPath;
 }
 
+async function preprocessForOcr(imagePath) {
+  try {
+    const sharp = require('sharp');
+    const outPath = imagePath.replace(/\.[^.]+$/i, '.ocr.png');
+    await sharp(imagePath)
+      .rotate() // auto-orient
+      .grayscale()
+      .normalise()
+      .sharpen()
+      .toFile(outPath);
+    return outPath;
+  } catch (e) {
+    // If sharp not available or fails, fallback to original path
+    return imagePath;
+  }
+}
+
 async function tryOcr(imagePath) {
   try {
     // try to use tesseract.js simple API (recognize) which is robust across versions
     const Tesseract = require('tesseract.js');
-    const res = await Tesseract.recognize(imagePath, 'eng');
+    const pre = await preprocessForOcr(imagePath);
+    const res = await Tesseract.recognize(pre, 'eng+ara', { tessedit_char_whitelist: '0123456789.,-ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz ج د ر.$€' });
     const text = res?.data?.text || null;
     if (text) return text;
   } catch (e) {
@@ -61,7 +79,8 @@ async function tryOcr(imagePath) {
   }
   // try native tesseract CLI as a fallback (recommended on desktop/server)
   try {
-    const txt = tryNativeTesseract(imagePath);
+    const pre = await preprocessForOcr(imagePath);
+    const txt = tryNativeTesseract(pre);
     if (txt) return txt;
   } catch (er) {
     console.warn('Native tesseract CLI not available or failed:', er.message || er);
@@ -86,15 +105,49 @@ async function processJob(store, job, pendingFile) {
     const attachmentsDir = path.join(__dirname, '..', 'data', 'attachments');
     if (job.type === 'receipt_ocr' || job.type === 'invoice_ocr' || job.type === 'receipt' || job.type === 'invoice') {
       const fileId = job.fileId;
-      const ext = 'jpg';
-      const dest = path.join(attachmentsDir, `${fileId}.${ext}`);
+      // First, download the file to a temporary path to infer extension
+      // Telegram file path includes extension; we'll re-use it for storage
+      const infoRes = await fetch(`https://api.telegram.org/bot${token}/getFile?file_id=${fileId}`);
+      if (!infoRes.ok) throw new Error('Failed to getFile info: ' + infoRes.status);
+      const info = await infoRes.json();
+      const tgPath = info?.result?.file_path || `${fileId}`;
+      const ext = path.extname(tgPath) || '.dat';
+      const dest = path.join(attachmentsDir, `${fileId}${ext}`);
       console.log('Downloading', fileId, 'to', dest);
       await downloadTelegramFile(token, fileId, dest);
-      const ocrText = await tryOcr(dest);
+      let ocrText = null;
+      if (/\.pdf$/i.test(dest)) {
+        try {
+          const pdfParse = require('pdf-parse');
+          const dataBuffer = fs.readFileSync(dest);
+          const pdfData = await pdfParse(dataBuffer);
+          ocrText = (pdfData && pdfData.text) ? String(pdfData.text) : null;
+        } catch (e) {
+          console.warn('pdf-parse failed; OCR via tesseract fallback', e?.message || e);
+          // As a fallback, attempt image-OCR (will yield nothing for native PDFs but safe to try)
+          try { ocrText = await tryOcr(dest); } catch (_) { ocrText = null; }
+        }
+        // If no embedded text, try rasterizing first page with pdftoppm (Poppler) and OCR the image
+        if (!ocrText) {
+          try {
+            const outPrefix = dest.replace(/\.pdf$/i, '') + '_page';
+            child_process.execFileSync('pdftoppm', ['-png', '-r', '300', dest, outPrefix], { stdio: 'ignore' });
+            const first = fs.existsSync(outPrefix + '-1.png') ? (outPrefix + '-1.png') : null;
+            if (first) {
+              const txt = await tryOcr(first);
+              if (txt) ocrText = txt;
+            }
+          } catch (e) {
+            console.warn('pdftoppm not available or rasterization failed:', e?.message || e);
+          }
+        }
+      } else {
+        ocrText = await tryOcr(dest);
+      }
       // Optionally parse OCR text with Ollama into structured fields (vendor, total, date, currency)
       let parsed = null;
       try {
-        if (ocrText && (config.aiProvider === 'ollama' || config.ollamaModel)) {
+        if (ocrText && config.aiProvider === 'ollama') {
           parsed = await parseReceiptWithOllama(ocrText);
         }
       } catch (e) {
@@ -103,7 +156,7 @@ async function processJob(store, job, pendingFile) {
       }
 
       // Always persist attachment_path and ocr_text to the entry
-      const stmtBase = store.db.prepare('UPDATE entries SET attachment_path = :f, ocr_text = :o, is_invoice = :inv WHERE id = :id');
+  const stmtBase = store.db.prepare('UPDATE entries SET attachment_path = :f, ocr_text = :o, is_invoice = :inv WHERE id = :id');
       stmtBase.run({ ':f': dest, ':o': ocrText || null, ':inv': job.type.includes('invoice') ? 1 : 0, ':id': job.entryId });
       stmtBase.free();
 
@@ -255,7 +308,10 @@ async function parseReceiptWithOllama(ocrText) {
 // Simple regex-based fallback to extract the most plausible total from OCR text
 function extractTotalFromOcr(ocrText) {
   if (!ocrText) return null;
-  const lines = ocrText.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+  // Normalize Arabic-Indic digits to ASCII 0-9
+  const mapDigits = (s) => s.replace(/[\u0660-\u0669]/g, (ch) => String(ch.charCodeAt(0) - 0x0660));
+  const normalizedText = mapDigits(ocrText);
+  const lines = normalizedText.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
   const candidates = [];
   const normalizeNum = (s) => {
     // Remove non-numeric except ., and , and digits
@@ -275,7 +331,7 @@ function extractTotalFromOcr(ocrText) {
   };
 
   // Look for lines with keywords first
-  const keyword = /(tutar|total|toplam|subtotal|amount|grand total)/i;
+  const keyword = /(tutar|total|toplam|subtotal|amount(?:\s+due)?|grand\s+total|total\s+due|balance\s+due|total\s+amount|المجموع|إجمالي|الاجمالي|الإجمالي|المبلغ|المبلغ\s+الإجمالي)/i;
   for (const line of lines) {
     if (keyword.test(line)) {
       const nums = (line.match(/[0-9]+(?:[.,][0-9]{1,3})?/g) || []).map(normalizeNum).filter(n => Number.isFinite(n));
@@ -286,6 +342,8 @@ function extractTotalFromOcr(ocrText) {
   // If no keyword hits, collect all numeric tokens and pick the largest reasonable one
   if (!candidates.length) {
     for (const line of lines) {
+      // Skip lines that look like dates or timestamps heavily
+      if (/\b\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4}\b/.test(line)) continue;
       const nums = (line.match(/[0-9]+(?:[.,][0-9]{1,3})?/g) || []).map(normalizeNum).filter(n => Number.isFinite(n));
       for (const n of nums) candidates.push({ n, reason: 'number', line });
     }
@@ -294,6 +352,9 @@ function extractTotalFromOcr(ocrText) {
   if (!candidates.length) return null;
   // pick the largest numeric candidate (most receipts have total as the largest value)
   candidates.sort((a,b) => b.n - a.n);
-  const top = candidates[0];
+  // Filter out absurdly large values that are unlikely to be totals (e.g., years or IDs)
+  const filtered = candidates.filter(c => c.n > 0 && c.n < 1e7);
+  const pool = filtered.length ? filtered : candidates;
+  const top = pool[0];
   return { total: top.n, reason: top.reason, line: top.line };
 }

@@ -37,6 +37,13 @@ class AliasStore {
     this.save();
   }
 
+  // remove an alias and persist
+  remove(alias) {
+    if (!alias) return;
+    this.map.delete(alias.toLowerCase());
+    this.save();
+  }
+
   get(alias) {
     if (!alias) return undefined;
     return this.map.get(alias.toLowerCase());
@@ -86,6 +93,18 @@ class AICache {
     if (!token || !canonical) return;
     this.map.set(token.toLowerCase(), canonical.toLowerCase());
     this.save();
+  }
+
+  // remove a cached AI mapping
+  remove(token) {
+    if (!token) return;
+    this.map.delete(token.toLowerCase());
+    this.save();
+  }
+
+  // return all mappings as plain object
+  all() {
+    return Object.fromEntries([...this.map.entries()]);
   }
 }
 

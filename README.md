@@ -1,14 +1,24 @@
 # Telegram Ledger Bot
 
-Log expenses from chat and get monthly Excel reports. Optimized for short messages like:
-- `F 100 elc`
-- `RENT 250 JOD flat in Amman`
-- `60 grcs`
+Log expenses from chat and get monthly Excel reports. Now with a fixed 7-category model and an easier Parser v2 for natural phrases.
+
+Quick examples:
+- Parser v2 (recommended):
+  - `60 g apples` (g = groceries)
+  - `75 usd t taxi` (t = transport)
+  - `b 45 jod electricity bill` (b = bills)
+- Classic (code-first):
+  - `F 100 elc`
+  - `RENT 250 JOD flat in Amman`
 
 Optionally uses a free local AI (Ollama) to learn new shortcuts like `elektr → electricity`.
 
 ## Features
-- Code-first and amount-first input (see “Message standard”).
+- Two parsing modes:
+  - Parser v2 (simple natural phrases, recommended): category as first word/letter from a fixed set.
+  - Classic parser (code-first or amount-first): `CODE AMOUNT [CURRENCY] [description]`.
+- Fixed categories (first word of description):
+  - groceries (g), food (f), transport (t), bills (b), health (h), rent (r), misc (m), and uncategorized (u)
 - Default currency JOD if omitted; `JD` is normalized to `JOD`.
 - Currency whitelist to avoid mistaking words like `elc` as currency.
 - Description normalization:
@@ -18,19 +28,25 @@ Optionally uses a free local AI (Ollama) to learn new shortcuts like `elektr →
 - `/report` and `/report YYYY-MM` generate Excel files with raw entries + category totals.
 - One message = one transaction (bot asks to split if multiple are detected).
 - SQLite-backed storage; reports saved under `data/reports`.
-- Optional lightweight Dashboard API (Express) with bearer auth for a future React UI.
+- Dashboard API (Express) with bearer auth + SPA dashboard (Vite/React):
   - Time scales: daily, weekly (ISO), monthly, yearly endpoints.
-  - Category filter, CSV export, drill-down from pie, light/dark theme, delta vs last month.
+  - Category filter with suggestions (sorted by biggest totals), CSV export, drill-down, light/dark theme.
+  - Avg Out/Day card; FX breakdown hidden by default.
 
 ## Message standard
 - One transaction per message.
-- Code-first (recommended):
-  - `CODE AMOUNT [CURRENCY] [description]`
-  - Examples: `F 100 elc`, `RENT 250 JOD flat in Amman`
-- Amount-first (simple; uses a default code):
-  - `AMOUNT [CURRENCY] [description]`
-  - Example: `60 grcs`
-  - Code will be `DEFAULT_AMOUNT_FIRST_CODE` (or `MISC` if not set).
+
+Parser v2 (recommended):
+- Natural phrases, category word or letter first, then details. Examples:
+  - `60 g apples` → groceries 60 JOD - apples
+  - `75 usd t taxi` → transport 75 USD - taxi
+  - `b 45 wtr bill` → bills 45 JOD - water bill
+- Accepted category letters: g, f, t, b, h, r, m, u (for uncategorized)
+- If you use a new word as first token, it will be prefixed with `uncategorized` unless there’s a known mapping.
+
+Classic parser:
+- Code-first: `CODE AMOUNT [CURRENCY] [description]` (e.g., `F 100 elc`)
+- Amount-first: `AMOUNT [CURRENCY] [description]` (e.g., `60 groceries`) → uses `DEFAULT_AMOUNT_FIRST_CODE` (or `MISC`).
 
 ## Quick start (Windows)
 1) Install
@@ -49,6 +65,12 @@ DB_PATH=./data/ledger.sqlite
 ALIASES_PATH=./data/aliases.json
 AI_CACHE_PATH=./data/ai_cache.json
 TIMEZONE=Asia/Amman
+# Switch to the new parser (recommended):
+PARSER_VERSION=v2
+# Enable dashboard + auth token
+DASHBOARD_ENABLED=true
+DASHBOARD_PORT=8090
+DASHBOARD_AUTH_TOKEN=your-strong-token
 ```
 
 3) Optional: free local AI (Ollama)
@@ -70,12 +92,8 @@ OLLAMA_MODEL=phi3:mini
 npm run start
 ```
 
-### Optional: Dashboard API
-- Set in `.env`:
-  - `DASHBOARD_ENABLED=true`
-  - `DASHBOARD_PORT=8090`
-  - `DASHBOARD_AUTH_TOKEN=your-strong-token`
-- When the bot starts, an HTTP API will be available at `http://localhost:8090`.
+### Dashboard API + SPA
+- When enabled, an HTTP API is available at `http://localhost:8090`.
 - Endpoints:
   - `GET /api/health` (no auth)
   - `GET /api/summary?month=YYYY-MM|current` (Bearer token)
@@ -90,6 +108,10 @@ npm run start
   - Budgets: `GET/POST /api/budgets`, `GET /api/budgets/progress?month=YYYY-MM`
   - Recurring: `GET/POST /api/recurring`, `DELETE /api/recurring/:id`
   - Static reports under `/files`.
+- SPA dashboard (Vite/React):
+  - Dev: `cd dashboard-app; npm install; npm run dev` → http://localhost:5173 (proxies API to 8090)
+  - Build: `npm run build` then the server will auto-serve from `dashboard-app/dist`.
+  - Recent UI changes: category suggestions (sorted by totals), Avg Out/Day card, FX breakdown hidden, Recent Entries shows Category.
 
 ## Commands
 - `/report` → report for current month
@@ -160,6 +182,29 @@ I can add an optional post-processing step that calls Ollama/OpenAI and writes t
 
 - Wire an Ollama-based parser (local, free if you run Ollama and a small model)
 - Or wire OpenAI parsing (requires an API key)
+
+## Recent changes (2025-09-26)
+
+Category model revamp + Parser v2 + Dashboard UX
+
+- Fixed taxonomy: all entries are now categorized using one of 7 categories (plus uncategorized) based on the first word of `description`:
+  - groceries (g), food (f), transport (t), bills (b), health (h), rent (r), misc (m), uncategorized (u)
+- Parser v2 (natural phrases):
+  - Example inputs: `60 g apples`, `75 usd t taxi`, `b 45 wtr bill`
+  - Toggle via `.env`: `PARSER_VERSION=v2`
+  - Unknown first tokens are prefixed with `uncategorized` to preserve category integrity.
+- Migration script to normalize historical data:
+  - Dry-run: `node scripts/migrate_categories.js --dry`
+  - Apply: `node scripts/migrate_categories.js`
+  - Filter to a single chat: `node scripts/migrate_categories.js --chat <chatId>`
+  - The script creates an automatic timestamped backup in `data/` before writing.
+- Dashboard SPA updates:
+  - Category suggestions dropdown (sorted by biggest totals), keyboard nav, clear button, and localStorage persistence.
+  - Avg Out/Day metric added.
+  - FX breakdown hidden for now.
+  - Recent Entries table shows Category instead of Code.
+
+—
 
 ## Recent changes (2025-09-25)
 

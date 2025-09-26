@@ -8,20 +8,69 @@ const KNOWN_CURRENCIES = new Set([
 
 const NORMALIZE_CURRENCY = { JD: "JOD" };
 
-// Shorthands and helpers are defined before parse so we can avoid
-// misclassifying shorthand tokens as currencies.
+// Canonical categories: small fixed set
+const CANON_CATEGORIES = [
+  "groceries",
+  "food",
+  "transport",
+  "bills",
+  "health",
+  "rent",
+  "misc",
+  "uncategorized",
+];
+
+// Shorthands and helpers: map many words to the canonical categories above.
+// Keep this small and opinionated.
 const SHORTHANDS = new Map([
-  ["elc", "electricity"],
-  ["elec", "electricity"],
-  ["electric", "electricity"],
-  ["wat", "water"],
-  ["wtr", "water"],
-  ["hst", "hosting"],
-  ["int", "internet"],
-  ["net", "internet"],
-  ["rent", "rent"],
-  ["tax", "tax"],
-  ["foo", "food"],
+  // Primary one-letter codes
+  ["g", "groceries"],
+  ["f", "food"],
+  ["t", "transport"],
+  ["b", "bills"],
+  ["h", "health"],
+  ["r", "rent"],
+  ["m", "misc"],
+  ["u", "uncategorized"],
+
+  // Groceries
+  ["gro", "groceries"], ["groc", "groceries"], ["grocery", "groceries"], ["groceries", "groceries"],
+  ["market", "groceries"], ["supermarket", "groceries"], ["mart", "groceries"], ["kol", "groceries"],
+
+  // Food & drinks
+  ["food", "food"], ["rest", "food"], ["restaurant", "food"], ["dine", "food"],
+  ["lunch", "food"], ["breakfast", "food"], ["dinner", "food"], ["snack", "food"], ["snacks", "food"],
+  ["coffee", "food"], ["cafe", "food"], ["tea", "food"], ["starbucks", "food"], ["costa", "food"],
+
+  // Transport (inc. car/fuel/parking/travel)
+  ["transport", "transport"], ["taxi", "transport"], ["cab", "transport"], ["uber", "transport"], ["careem", "transport"],
+  ["ride", "transport"], ["bus", "transport"], ["metro", "transport"], ["train", "transport"], ["parking", "transport"],
+  ["fuel", "transport"], ["gas", "transport"], ["petrol", "transport"], ["diesel", "transport"],
+  ["car", "transport"], ["carwash", "transport"], ["wash", "transport"], ["maint", "transport"], ["maintenance", "transport"],
+  ["repair", "transport"], ["service", "transport"],
+  ["travel", "transport"], ["flight", "transport"], ["ticket", "transport"], ["hotel", "transport"], ["booking", "transport"],
+  ["visa", "transport"], ["passport", "transport"],
+
+  // Bills (utilities/phone/subscriptions/hosting)
+  ["bills", "bills"], ["bill", "bills"], ["utility", "bills"], ["utilities", "bills"],
+  ["electric", "bills"], ["electricity", "bills"], ["power", "bills"],
+  ["wat", "bills"], ["wtr", "bills"], ["water", "bills"],
+  ["int", "bills"], ["net", "bills"], ["internet", "bills"], ["wifi", "bills"],
+  ["hst", "bills"], ["hosting", "bills"],
+  ["phone", "bills"], ["mobile", "bills"], ["airtime", "bills"], ["topup", "bills"], ["recharge", "bills"], ["data", "bills"],
+  ["sub", "bills"], ["subs", "bills"], ["subscription", "bills"], ["netflix", "bills"], ["spotify", "bills"], ["icloud", "bills"], ["youtube", "bills"], ["yt", "bills"],
+
+  // Health
+  ["phar", "health"], ["pharma", "health"], ["pharmacy", "health"], ["med", "health"], ["meds", "health"], ["medicine", "health"],
+  ["doctor", "health"], ["clinic", "health"], ["hospital", "health"], ["dentist", "health"],
+
+  // Rent / housing
+  ["rent", "rent"], ["lease", "rent"],
+
+  // Misc (fallback-ish words)
+  ["misc", "misc"], ["other", "misc"], ["gift", "misc"], ["gifts", "misc"], ["present", "misc"],
+  ["charity", "misc"], ["donation", "misc"], ["donate", "misc"], ["zakat", "misc"], ["sadaqa", "misc"], ["sadaka", "misc"], ["sadaqah", "misc"],
+  ["tax", "misc"], ["fee", "misc"], ["fine", "misc"], ["receipt", "misc"],
 ]);
 
 function isShorthandLike(word) {
@@ -124,3 +173,4 @@ function isKnownDescriptionRoot(word) {
 module.exports.normalizeDescription = normalizeDescription;
 module.exports.isKnownDescriptionRoot = isKnownDescriptionRoot;
 module.exports.SHORTHANDS = SHORTHANDS;
+module.exports.CANON_CATEGORIES = CANON_CATEGORIES;

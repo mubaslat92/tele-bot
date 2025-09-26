@@ -1,0 +1,104 @@
+{\rtf1\ansi\deff0
+{\fonttbl{\f0 Calibri;}{\f1 Arial;}}
+{\colortbl;\red0\green0\blue0;}
+\fs24
+\pard\qc\b\fs36 SME Ledger & OCR Product Roadmap\b0\par
+\pard\qc\fs20 Last updated: September 26, 2025\par
+\pard\par
+\pard\sa200\b\fs28 North Star\b0\fs24\par
+\pard\li360\sa120\bullet \tab Capture everywhere (Telegram, email, web, mobile) \emdash auto-extract \emdash suggest \emdash one-tap apply \emdash export to accounting.\par
+\bullet \tab Reliable OCR + smart parsing, category intelligence, and tax/VAT handling by country.\par
+\pard\par
+\pard\sa200\b\fs28 Platform & Architecture\b0\fs24\par
+\pard\li360\sa120\bullet \tab Consolidate services: keep bot, worker, API, and dashboard as modules in one repo with a shared \ldblquote domain\rdblquote  package.\par
+\bullet \tab Durable DB: migrate to Postgres (or keep SQLite for single-user, Postgres for multi-tenant). Use Prisma for schema, migrations, and type-safety.\par
+\bullet \tab Queues/workers: move jobs to BullMQ + Redis (retry, backoff, concurrency, scheduling).\par
+\bullet \tab File storage: switch attachments to S3-compatible storage (MinIO locally) with signed URLs and lifecycle rules.\par
+\bullet \tab Config: central .env with schema validation (zod/env-var). Secrets via Doppler/1Password/GitHub Envs.\par
+\pard\par
+\pard\sa200\b\fs28 Reliability, Observability, Ops\b0\fs24\par
+\pard\li360\sa120\bullet \tab Logging: pino + request IDs; redact PII.\par
+\bullet \tab Metrics: Prometheus + Grafana dashboards (jobs processed, OCR success rate, latencies).\par
+\bullet \tab Errors: Sentry on API, worker, and frontend.\par
+\bullet \tab Backups: nightly DB + attachment backups; restore scripts; integrity checks.\par
+\bullet \tab CI/CD: GitHub Actions (lint/test/build), preview deploys, release tagging.\par
+\pard\par
+\pard\sa200\b\fs28 Security & Compliance\b0\fs24\par
+\pard\li360\sa120\bullet \tab Auth: JWT sessions, role-based access (Owner, Accountant, Staff).\par
+\bullet \tab Audit log: immutable table for changes and approvals.\par
+\bullet \tab Rate limiting, input validation everywhere.\par
+\bullet \tab PII handling and data retention policies; right-to-delete per user.\par
+\bullet \tab Multi-tenant isolation (tenant_id on all tables, Row-Level Security for Postgres).\par
+\pard\par
+\pard\sa200\b\fs28 Core Product Features (High ROI)\b0\fs24\par
+\pard\li360\sa120\bullet \tab Bank CSV import + auto-categorization and reconciliation.\par
+\bullet \tab Receipt-to-transaction linking: detect potential matches (amount/date/merchant), one-click attach.\par
+\bullet \tab Budgets and alerts: per category monthly, with over/under spend notifications.\par
+\bullet \tab VAT/GST support: per-country rules, per-line tax detection, export VAT report.\par
+\bullet \tab Multi-currency: auto FX via daily rates; base-currency reporting.\par
+\bullet \tab Advanced search: by merchant, amount range, category, date, and attachment presence.\par
+\pard\par
+\pard\sa200\b\fs28 OCR/AI Upgrades\b0\fs24\par
+\pard\li360\sa120\bullet \tab Cloud OCR adapters behind a flag: Azure Document Intelligence (prebuilt receipt/invoice) and Google Document AI. Keep Tesseract as fallback.\par
+\bullet \tab Structured extraction: model for fields (merchant, date, total, tax breakdown, currency) with confidence scores; show diff in UI.\par
+\bullet \tab Self-hosted option: PaddleOCR + PP-Structure for on-premise.\par
+\bullet \tab Active learning: Accept/reject trains alias/category models and extraction heuristics.\par
+\bullet \tab Layout-aware \ldblquote closest total\rdblquote  using OCR geometry (bounding boxes).\par
+\pard\par
+\pard\sa200\b\fs28 UX & Surfaces\b0\fs24\par
+\pard\li360\sa120\bullet \tab Suggestions inbox: triage view, batch-apply, keyboard shortcuts, conflict highlighting.\par
+\bullet \tab Editing experience: quick inline edits; smart defaults; templates per merchant.\par
+\bullet \tab Timeline and reports: cashflow, category drill-down, vendor spend, recurring patterns.\par
+\bullet \tab Mobile: PWA with offline capture and delayed upload; camera doc scan with auto-crop.\par
+\bullet \tab Email ingestion: unique inbox address; auto-attach PDFs to entries.\par
+\pard\par
+\pard\sa200\b\fs28 Integrations\b0\fs24\par
+\pard\li360\sa120\bullet \tab Accounting: Xero, QuickBooks, Zoho Books (exports and direct sync).\par
+\bullet \tab Storage: Google Drive/OneDrive/Dropbox for backup of attachments.\par
+\bullet \tab Communications: WhatsApp (Twilio) and email replies with confirmation links.\par
+\pard\par
+\pard\sa200\b\fs28 Data Model Enhancements\b0\fs24\par
+\pard\li360\sa120\bullet \tab Tables: entries, attachments, suggestions, vendors, aliases, budgets, approvals, audit_log, exchange_rates, tax_rules, tenants/users.\par
+\bullet \tab Soft deletes (deleted_at), versioning for entries, and mapping for vendor normalization.\par
+\bullet \tab Indexing on date, category, amount; trigram index for merchant fuzzy search (Postgres).\par
+\pard\par
+\pard\sa200\b\fs28 Growth & Analytics\b0\fs24\par
+\pard\li360\sa120\bullet \tab Product analytics: PostHog for UX funnels (capture \u8594? suggest \u8594? apply).\par
+\bullet \tab Feature flags: Unleash/ConfigCat for controlled rollouts.\par
+\bullet \tab Onboarding checklist and sample data for new tenants.\par
+\pard\par
+\pard\sa200\b\fs28 Developer Experience\b0\fs24\par
+\pard\li360\sa120\bullet \tab Monorepo tooling: pnpm workspaces or turbo; ESLint/Prettier; TypeScript across backend and worker.\par
+\bullet \tab Contract tests for OCR providers and extraction schema.\par
+\bullet \tab Seed scripts and factory data for realistic dev runs.\par
+\pard\par
+\pard\sa200\b\fs28 Monetization (if SaaS)\b0\fs24\par
+\pard\li360\sa120\bullet \tab Stripe billing: free tier (local OCR), Pro (cloud OCR + integrations), Business (multi-user, approvals).\par
+\bullet \tab Usage-based add-ons: OCR pages, storage.\par
+\pard\par
+\pard\sa200\b\fs28 30/60/90-Day Action Plan\b0\fs24\par
+\pard\li360\sa120\b Next 30 days\b0\par
+\pard\li720\sa60\bullet \tab Introduce Prisma + Postgres (or keep SQLite as \ldblquote local mode\rdblquote ), migrate schema.\par
+\bullet \tab Add BullMQ + Redis; convert current OCR worker.\par
+\bullet \tab S3 storage for attachments; signed URLs.\par
+\bullet \tab Observability: pino, Sentry, basic Prometheus metrics.\par
+\bullet \tab UI: Suggestions inbox with batch actions and confidence indicators.\par
+\pard\li360\sa120\b Next 60 days\b0\par
+\pard\li720\sa60\bullet \tab Cloud OCR adapters with feature flag; geometry-aware extraction and confidence scoring.\par
+\bullet \tab Bank CSV import + reconciliation; vendor normalization; duplicates detection.\par
+\bullet \tab Budgets + alerts; multi-currency FX service.\par
+\bullet \tab Audit log + roles/permissions.\par
+\pard\li360\sa120\b Next 90 days\b0\par
+\pard\li720\sa60\bullet \tab Xero/QuickBooks export/sync.\par
+\bullet \tab Email ingestion + PDF parsing.\par
+\bullet \tab Mobile PWA polish (camera scanning) and offline queue.\par
+\bullet \tab Stripe billing and tenant management.\par
+\pard\par
+\pard\sa200\b\fs28 Quick Wins to Ship First\b0\fs24\par
+\pard\li360\sa120\bullet \tab Batch review/apply in Suggestions with confidence sorting.\par
+\bullet \tab Bank CSV import + mapping wizard (detect columns; remember per-bank format).\par
+\bullet \tab S3-backed attachment storage with migration utility.\par
+\bullet \tab Cloud OCR adapter scaffold with toggle and safe fallbacks.\par
+\pard\par
+\pard\fs20 \i Notes:\i0  This RTF opens in Microsoft Word. If you need a .docx file, open this in Word and \ldblquote Save As\rdblquote  \emdash or let me know and I can export it as .docx.\par
+}

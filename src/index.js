@@ -17,6 +17,23 @@ async function main() {
   const store = await LedgerStore.create(config.dbPath);
   let bot = null;
 
+  // Watch the DB file on disk for external updates (worker writes) and reload in-memory DB when it changes.
+  try {
+    const fs = require('fs');
+    fs.watchFile(config.dbPath, { interval: 1000 }, async (curr, prev) => {
+      if (curr.mtimeMs !== prev.mtimeMs) {
+        try {
+          const reloaded = await store.reloadFromDisk();
+          if (reloaded) console.log('LedgerStore: reloaded DB from disk due to external change');
+        } catch (e) {
+          console.warn('LedgerStore: reload failed', e?.message || e);
+        }
+      }
+    });
+  } catch (e) {
+    console.warn('Failed to watch DB file for changes:', e?.message || e);
+  }
+
   // Start Dashboard API first so it’s available even if the bot startup hangs
   if (config.dashboardEnabled) {
     const api = createApiApp({ store, config });
@@ -32,6 +49,7 @@ async function main() {
     startBot(bot)
       .then(() => {
         console.log("Telegram bot started");
+
         scheduleMonthlyReports({ bot, store });
       })
       .catch((e) => {

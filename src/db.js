@@ -1,7 +1,9 @@
 const fs = require("fs");
 const fsp = require("fs/promises");
 const path = require("path");
-const initSqlJs = require("sql.js");
+// sql.js can be an ESM package that uses top-level await in some versions.
+// Import it dynamically inside create() to avoid require() failing when the
+// environment contains ESM with top-level await.
 
 const ensureDir = async (targetPath) => {
   const dir = path.dirname(targetPath);
@@ -10,6 +12,15 @@ const ensureDir = async (targetPath) => {
 
 class LedgerStore {
   static async create(filePath) {
+    // Dynamic import to support sql.js ESM builds
+    let initSqlJs;
+    try {
+      const mod = await import('sql.js');
+      initSqlJs = mod.default || mod;
+    } catch (e) {
+      // fallback to require for older environments
+      initSqlJs = require('sql.js');
+    }
     const SQL = await initSqlJs({
       locateFile: (file) => path.join(__dirname, "../node_modules/sql.js/dist", file),
     });
@@ -204,6 +215,23 @@ class LedgerStore {
     const data = this.db.export();
     const buffer = Buffer.from(data);
     await fsp.writeFile(this.filePath, buffer);
+  }
+
+  // Reload the in-memory sql.js database from the on-disk file.
+  // Call this when another process (worker) may have updated the file.
+  async reloadFromDisk() {
+    try {
+      if (!fs.existsSync(this.filePath)) return false;
+      const fileBuffer = await fsp.readFile(this.filePath);
+      // Create a fresh Database instance from the file buffer
+      this.db = new this.SQL.Database(fileBuffer);
+      // Ensure schema in case of older DBs
+      this.#ensureSchema();
+      return true;
+    } catch (e) {
+      console.error('Failed to reload DB from disk:', e?.message || e);
+      return false;
+    }
   }
 
   getFxRateOn(dateIso, currency) {
@@ -431,6 +459,14 @@ class LedgerStore {
     const entry = stmt.step() ? stmt.getAsObject() : null;
     stmt.free();
     return entry;
+  }
+
+  getEntryById(id) {
+    const stmt = this.db.prepare(`SELECT id, chat_id as chatId, user_id as userId, code, amount, description, currency, created_at as createdAt, attachment_path as attachmentPath, ocr_text as ocrText FROM entries WHERE id = :id`);
+    stmt.bind({ ':id': id });
+    const row = stmt.step() ? stmt.getAsObject() : null;
+    stmt.free();
+    return row;
   }
 
   async deleteEntryById(id) {

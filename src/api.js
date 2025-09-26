@@ -54,6 +54,7 @@ function authMiddleware(token) {
 
 function createApiApp({ store, config }) {
   const app = express();
+  try { console.log('API: createApiApp start'); } catch (_) {}
   app.use(express.json());
   // minimal CORS for dev
   app.use((req, res, next) => {
@@ -70,13 +71,73 @@ function createApiApp({ store, config }) {
     res.json({ ok: true, time: new Date().toISOString() });
   });
 
+  // DEV-ONLY: bulk seed entries for testing the dashboard
+  app.post('/api/seed', requireAuth, async (req, res) => {
+    try {
+      if (String(process.env.NODE_ENV).toLowerCase() === 'production') {
+        return res.status(403).json({ error: 'disabled in production' });
+      }
+      const { entries } = req.body || {};
+      if (!Array.isArray(entries) || entries.length === 0) {
+        return res.status(400).json({ error: 'entries[] required' });
+      }
+      let inserted = 0;
+      for (const e of entries) {
+        if (typeof e !== 'object' || e == null) continue;
+        const amount = Number(e.amount);
+        const description = typeof e.description === 'string' ? e.description : '';
+        if (!Number.isFinite(amount) || !description) continue;
+        const chatId = String(e.chatId || 'seed');
+        const userId = String(e.userId || chatId);
+        const createdAt = e.createdAt ? new Date(e.createdAt).toISOString() : new Date().toISOString();
+        const currency = e.currency ? String(e.currency).toUpperCase() : 'JOD';
+        const code = (e.code ? String(e.code) : 'F').toUpperCase();
+        const entry = { chatId, userId, code, amount, currency, description, createdAt };
+        await store.addEntry(entry);
+        inserted++;
+      }
+      return res.json({ ok: true, inserted });
+    } catch (e) {
+      console.error('seed failed', e);
+      return res.status(500).json({ error: e?.message || String(e) });
+    }
+  });
+
   // Serve report files for convenient linking
   app.use("/files", express.static(path.resolve(config.reportsDir)));
-  // Serve a tiny static dashboard UI
+  // Serve the legacy static dashboard UI
   app.use(
     "/dashboard",
     express.static(path.resolve(__dirname, "..", "public", "dashboard")),
   );
+
+  // Optionally serve the new SPA build if present
+  try {
+    const spaDir = path.resolve(__dirname, "..", "dashboard-app", "dist");
+    if (fs.existsSync(spaDir)) {
+      app.use(express.static(spaDir));
+      app.get(["/", "/index.html"], (_req, res) => {
+        res.sendFile(path.join(spaDir, "index.html"));
+      });
+    }
+  } catch (_) {}
+
+  // Debug: list registered routes
+  app.get('/api/routes', (_req, res) => {
+    try {
+      const routes = [];
+      const stack = app._router && app._router.stack ? app._router.stack : [];
+      for (const layer of stack) {
+        if (layer.route && layer.route.path) {
+          const methods = Object.keys(layer.route.methods || {}).filter(Boolean);
+          routes.push({ path: layer.route.path, methods });
+        }
+      }
+      res.json({ routes });
+    } catch (e) {
+      res.json({ error: e?.message || String(e) });
+    }
+  });
 
   app.get("/api/summary", requireAuth, (req, res) => {
     const m = parseMonthParam(String(req.query.month || ""));
@@ -157,7 +218,14 @@ function createApiApp({ store, config }) {
 
   app.get("/api/chats", requireAuth, (_req, res) => {
     const chats = store.getDistinctChatIds();
-    res.json({ chats });
+    let names = {};
+    try {
+      if (fs.existsSync(config.chatNamesPath)) {
+        names = JSON.parse(fs.readFileSync(config.chatNamesPath, 'utf8')) || {};
+      }
+    } catch (_) {}
+    const data = chats.map(id => ({ id, name: names[id] || id }));
+    res.json({ chats: data });
   });
 
   app.get("/api/by-category", requireAuth, (req, res) => {
@@ -184,12 +252,14 @@ function createApiApp({ store, config }) {
     const m = parseMonthParam(String(req.query.month || ""));
     if (!m) return res.status(400).json({ error: "month must be YYYY-MM" });
     const chatId = req.query.chatId ? String(req.query.chatId) : null;
+    const category = req.query.category ? String(req.query.category).toLowerCase() : null;
     const chatIds = chatId ? [chatId] : store.getDistinctChatIds();
     const totals = new Map(); // date -> amount
     for (const cid of chatIds) {
       const rows = store.getEntriesBetween(cid, m.startIso, m.endIso);
       for (const r of rows) {
         if (r.code && String(r.code).toUpperCase() === "XFER") continue;
+        if (category && getCategory(r.description) !== category) continue;
         const d = new Date(r.createdAt);
         if (Number.isNaN(d.getTime())) continue;
         const key = d.toISOString().slice(0, 10); // YYYY-MM-DD (UTC)
@@ -203,6 +273,7 @@ function createApiApp({ store, config }) {
 
   app.get("/api/weekly", requireAuth, (req, res) => {
     const chatId = req.query.chatId ? String(req.query.chatId) : null;
+    const category = req.query.category ? String(req.query.category).toLowerCase() : null;
     const chatIds = chatId ? [chatId] : store.getDistinctChatIds();
     let range;
     const mStr = req.query.month ? String(req.query.month) : "";
@@ -221,6 +292,7 @@ function createApiApp({ store, config }) {
     for (const cid of chatIds) {
       const rows = store.getEntriesBetween(cid, range.startIso, range.endIso);
       for (const r of rows) {
+        if (category && getCategory(r.description) !== category) continue;
         const d = new Date(r.createdAt);
         if (Number.isNaN(d.getTime())) continue;
         const { year, week } = isoWeekInfo(d);
@@ -258,6 +330,7 @@ function createApiApp({ store, config }) {
   app.get("/api/monthly", requireAuth, (req, res) => {
     const year = parseInt(String(req.query.year || new Date().getUTCFullYear()), 10);
     const chatId = req.query.chatId ? String(req.query.chatId) : null;
+    const category = req.query.category ? String(req.query.category).toLowerCase() : null;
     const chatIds = chatId ? [chatId] : store.getDistinctChatIds();
     const out = [];
     for (let m = 1; m <= 12; m++) {
@@ -266,12 +339,272 @@ function createApiApp({ store, config }) {
       let sum = 0;
       for (const cid of chatIds) {
         const rows = store.getEntriesBetween(cid, start, end);
-        for (const r of rows) sum += Number(r.amount) || 0;
+        for (const r of rows) {
+          if (category && getCategory(r.description) !== category) continue;
+          sum += Number(r.amount) || 0;
+        }
       }
       out.push({ month: `${year}-${String(m).padStart(2, "0")}`, amount: sum });
     }
     res.json({ year, data: out });
   });
+
+  // Helper: month keys for last N months (ascending)
+  function getLastNMonthsKeys(n) {
+    const now = new Date();
+    const out = [];
+    for (let i = n - 1; i >= 0; i--) {
+      const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
+      out.push(`${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`);
+    }
+    return out;
+  }
+
+  // Helper: aggregate monthly totals in base JOD per category
+  function buildMonthlySeries({ months = 24, chatId = null, category = null }) {
+    const monthKeys = getLastNMonthsKeys(months);
+    const seriesByCat = new Map(); // cat -> Array(len=months)
+    const chats = chatId ? [chatId] : store.getDistinctChatIds();
+    const codeToName = { g:'groceries', f:'food', t:'transport', b:'bills', h:'health', r:'rent', m:'misc', u:'uncategorized' };
+    const nameToCode = Object.fromEntries(Object.entries(codeToName).map(([k,v]) => [v,k]));
+    const catSynonyms = (c) => {
+      const lc = String(c||'').toLowerCase();
+      const out = new Set([lc]);
+      if (codeToName[lc]) out.add(codeToName[lc]);
+      if (nameToCode[lc]) out.add(nameToCode[lc]);
+      return out;
+    };
+    const filterSet = (category && category !== 'all') ? catSynonyms(category) : null;
+    // prefill
+    if (filterSet) seriesByCat.set(String(category).toLowerCase(), Array(months).fill(0));
+    for (let idx = 0; idx < months; idx++) {
+      const key = monthKeys[idx];
+      const p = parseMonthParam(key);
+      for (const cid of chats) {
+        const rows = store.getEntriesBetween(cid, p.startIso, p.endIso);
+        for (const r of rows) {
+          // Exclude transfers and income for expense forecasting
+          const code = String(r.code || '').toUpperCase();
+          if (code === 'XFER' || r.is_income) continue;
+          const cat = getCategory(r.description);
+          if (filterSet && !filterSet.has(String(cat||'').toLowerCase())) continue;
+          // Base JOD amount
+          const base = (typeof r.base_amount_jod === 'number' && !Number.isNaN(r.base_amount_jod))
+            ? r.base_amount_jod
+            : ((r.currency || 'JOD').toUpperCase() === 'JOD'
+                ? (Number(r.amount) || 0)
+                : (Number(r.amount) || 0) * (store.getFxRateOn(r.createdAt, r.currency) || 1));
+          const keyOut = filterSet ? String(category).toLowerCase() : cat;
+          if (!seriesByCat.has(keyOut)) seriesByCat.set(keyOut, Array(months).fill(0));
+          seriesByCat.get(keyOut)[idx] += base;
+        }
+      }
+    }
+    return { months: monthKeys, seriesByCat };
+  }
+
+  // Linear regression forecast and CI bands
+  function lrForecast(series, h = 1) {
+    const n = series.length;
+    if (n < 6) return { ok: false, reason: 'insufficient_history' };
+    let sumX = 0, sumY = 0, sumXY = 0, sumXX = 0;
+    for (let i = 0; i < n; i++) {
+      const x = i;
+      const y = series[i];
+      sumX += x; sumY += y; sumXY += x * y; sumXX += x * x;
+    }
+    const denom = (n * sumXX - sumX * sumX);
+    if (denom === 0) return { ok: false, reason: 'degenerate_series' };
+    const b = (n * sumXY - sumX * sumY) / denom;
+    const a = (sumY - b * sumX) / n;
+    const yhat = series.map((_, i) => a + b * i);
+    const residuals = series.map((y, i) => y - yhat[i]);
+    const sse = residuals.reduce((s, e) => s + e * e, 0);
+    const sigma = Math.sqrt(sse / Math.max(1, n - 2)); // std error
+  const nextX = n + (h - 1);
+  const forecast = a + b * nextX;
+    // naive CI assuming homoskedasticity
+    const ci80 = [forecast - 1.2816 * sigma, forecast + 1.2816 * sigma];
+    const ci95 = [forecast - 1.96 * sigma, forecast + 1.96 * sigma];
+    return { ok: true, method: 'lr', a, b, forecast, ci80, ci95, sigma, h };
+  }
+
+  // Holt-Winters additive (monthly seasonality m=12)
+  function hwForecast(series, opts = {}) {
+    const m = 12;
+    const n = series.length;
+    if (n < 2 * m) return { ok: false, reason: 'insufficient_history' };
+    const alphas = opts.alphas || [0.2, 0.3, 0.4];
+    const betas = opts.betas || [0.1, 0.2];
+    const gammas = opts.gammas || [0.1, 0.2, 0.3];
+    const h = Math.max(1, Math.min(12, opts.h || 1));
+
+    function initSeasonals(y) {
+      const seasonals = new Array(m).fill(0);
+      const seasons = Math.floor(n / m);
+      const avgPerSeason = [];
+      for (let s = 0; s < seasons; s++) {
+        const start = s * m;
+        let sum = 0; for (let i = 0; i < m; i++) sum += y[start + i];
+        avgPerSeason.push(sum / m);
+      }
+      for (let i = 0; i < m; i++) {
+        let acc = 0;
+        for (let s = 0; s < seasons; s++) {
+          acc += y[s * m + i] - avgPerSeason[s];
+        }
+        seasonals[i] = acc / seasons;
+      }
+      const overallMean = y.reduce((s, x) => s + x, 0) / n;
+      // normalize to zero-mean additive seasonals
+      const meanSeason = seasonals.reduce((s, x) => s + x, 0) / m;
+      for (let i = 0; i < m; i++) seasonals[i] = seasonals[i] - meanSeason;
+      const L0 = y[0] - seasonals[0];
+      let T0 = 0;
+      // trend init by average change per season
+      let cnt = 0, sum = 0;
+      for (let i = 0; i < n - m; i++) { sum += (y[i + m] - y[i]) / m; cnt++; }
+      T0 = cnt ? (sum / cnt) : 0;
+      return { L0, T0, S0: seasonals };
+    }
+
+    function runHW(y, alpha, beta, gamma) {
+      const { L0, T0, S0 } = initSeasonals(y);
+      const L = new Array(n).fill(0);
+      const T = new Array(n).fill(0);
+      const S = new Array(n).fill(0);
+      // seed
+      L[0] = L0; T[0] = T0; for (let i = 0; i < m; i++) S[i] = S0[i];
+      const yhat = new Array(n).fill(0);
+      yhat[0] = L[0] + T[0] + S[0];
+      for (let t = 1; t < n; t++) {
+        const sIdx = t - m >= 0 ? t - m : (t % m);
+        const Stm = t - m >= 0 ? S[t - m] : S0[sIdx];
+        // level
+        L[t] = alpha * (y[t] - Stm) + (1 - alpha) * (L[t - 1] + T[t - 1]);
+        // trend
+        T[t] = beta * (L[t] - L[t - 1]) + (1 - beta) * T[t - 1];
+        // seasonal
+        S[t] = gamma * (y[t] - L[t]) + (1 - gamma) * Stm;
+        yhat[t] = L[t - 1] + T[t - 1] + Stm; // one-step-ahead fitted
+      }
+      const residuals = y.map((val, i) => val - yhat[i]);
+      const sse = residuals.reduce((s, e) => s + e * e, 0);
+      const sigma = Math.sqrt(sse / Math.max(1, n - 3));
+      // 1-step forecast (next month)
+  // seasonal component index for h-step ahead: use S[n - m + ((h - 1) % m)]
+  const sIdx = (n - m + ((h - 1) % m));
+  const Stm = sIdx >= 0 ? S[sIdx] : S0[((h - 1) % m)];
+  const forecast = L[n - 1] + h * T[n - 1] + Stm;
+      const ci80 = [forecast - 1.2816 * sigma, forecast + 1.2816 * sigma];
+      const ci95 = [forecast - 1.96 * sigma, forecast + 1.96 * sigma];
+      return { L, T, S, yhat, residuals, sse, sigma, forecast };
+    }
+
+    let best = null;
+    for (const a of alphas) for (const b of betas) for (const g of gammas) {
+      const out = runHW(series, a, b, g);
+      if (!best || out.sse < best.sse) best = { ...out, alpha: a, beta: b, gamma: g };
+    }
+    if (!best) return { ok: false, reason: 'fit_failed' };
+    return {
+      ok: true,
+      method: 'hw',
+      alpha: best.alpha, beta: best.beta, gamma: best.gamma,
+      forecast: best.forecast,
+      ci80: [best.forecast - 1.2816 * best.sigma, best.forecast + 1.2816 * best.sigma],
+      ci95: [best.forecast - 1.96 * best.sigma, best.forecast + 1.96 * best.sigma],
+      sigma: best.sigma,
+      h,
+    };
+  }
+
+  // Simple ping to verify route registration path is reachable
+  app.get('/api/forecast/ping', (_req, res) => {
+    res.json({ ok: true });
+  });
+
+  // Forecast endpoint
+  app.get('/api/forecast', requireAuth, async (req, res) => {
+    try {
+      if (config.forecastingEnabled === false) {
+        return res.status(403).json({ error: 'forecasting disabled' });
+      }
+      const chatId = req.query.chatId ? String(req.query.chatId) : null;
+      const category = req.query.category ? String(req.query.category).toLowerCase() : 'all';
+      const months = Math.max(3, Math.min(60, parseInt(String(req.query.months || 24), 10)));
+  const method = String(req.query.method || config.forecastMethod || 'auto').toLowerCase();
+  const h = Math.max(1, Math.min(12, parseInt(String(req.query.h || 1), 10)));
+      const { months: monthKeys, seriesByCat } = buildMonthlySeries({ months, chatId, category });
+      const targets = category && category !== 'all' ? [category] : Array.from(seriesByCat.keys());
+      const results = [];
+      for (const cat of targets) {
+        const series = seriesByCat.get(cat) || Array(months).fill(0);
+        let out;
+        if (method === 'lr') out = lrForecast(series, h);
+        else if (method === 'hw') out = hwForecast(series, { h });
+        else {
+          out = series.length >= 24 ? hwForecast(series, { h }) : lrForecast(series, h);
+          if (!out.ok && out.reason === 'insufficient_history') out = lrForecast(series, h);
+        }
+        results.push({ category: cat, months: monthKeys, history: series, ...out });
+      }
+      res.json({ unit: 'JOD', h, results });
+    } catch (e) {
+      res.status(500).json({ error: e?.message || String(e) });
+    }
+  });
+  try { console.log('API: /api/forecast route registered'); } catch (_) {}
+
+  function rollingMeanStd(arr) {
+    const n = arr.length;
+    if (n === 0) return { mean: 0, std: 0 };
+    const mean = arr.reduce((s, x) => s + x, 0) / n;
+    const varr = arr.reduce((s, x) => s + (x - mean) * (x - mean), 0) / Math.max(1, n - 1);
+    return { mean, std: Math.sqrt(varr) };
+  }
+
+  // Anomaly detection endpoint
+  app.get('/api/anomalies', requireAuth, (req, res) => {
+    try {
+      if (config.anomalyDetectionEnabled === false) {
+        return res.status(403).json({ error: 'anomaly detection disabled' });
+      }
+      const chatId = req.query.chatId ? String(req.query.chatId) : null;
+      const category = req.query.category ? String(req.query.category).toLowerCase() : 'all';
+      const months = Math.max(6, Math.min(60, parseInt(String(req.query.months || 24), 10)));
+      const window = Math.max(3, Math.min(24, parseInt(String(req.query.window || 12), 10)));
+      const zThresh = Number(req.query.z || 3.0);
+      const { months: monthKeys, seriesByCat } = buildMonthlySeries({ months, chatId, category });
+      const targets = category && category !== 'all' ? [category] : Array.from(seriesByCat.keys());
+      const anomalies = [];
+      for (const cat of targets) {
+        const series = seriesByCat.get(cat) || Array(months).fill(0);
+        for (let i = window; i < months; i++) {
+          const hist = series.slice(i - window, i);
+          const { mean, std } = rollingMeanStd(hist);
+          const actual = series[i];
+          const expected = mean;
+          const z = std > 0 ? (actual - expected) / std : 0;
+          if (std > 0 && Math.abs(z) >= zThresh) {
+            anomalies.push({ category: cat, month: monthKeys[i], actual, expected, z, method: 'zscore' });
+          }
+          // domain rule for bills-like spikes (category 'b' or starts with 'b')
+          if (cat === 'b' || cat === 'bills') {
+            const median = [...hist].sort((a,b)=>a-b)[Math.floor(hist.length/2)] || 0;
+            if (median > 0 && actual >= 1.8 * median) {
+              anomalies.push({ category: cat, month: monthKeys[i], actual, expected: median, z: null, method: 'rule', note: 'bills>1.8x median' });
+            }
+          }
+        }
+      }
+      anomalies.sort((a, b) => String(a.month).localeCompare(String(b.month)));
+      res.json({ unit: 'JOD', anomalies });
+    } catch (e) {
+      res.status(500).json({ error: e?.message || String(e) });
+    }
+  });
+  try { console.log('API: /api/anomalies route registered'); } catch (_) {}
 
   app.get("/api/entries", requireAuth, (req, res) => {
     const m = parseMonthParam(String(req.query.month || ""));
@@ -290,6 +623,86 @@ function createApiApp({ store, config }) {
     }
     rowsAll.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
     res.json({ month: `${m.year}-${String(m.month).padStart(2, "0")}`, data: rowsAll.slice(0, limit) });
+  });
+
+  // Export entries for a month (CSV or XLSX)
+  app.get('/api/export', requireAuth, async (req, res) => {
+    const monthStr = String(req.query.month || '');
+    const startStr = req.query.start ? String(req.query.start) : null;
+    const endStr = req.query.end ? String(req.query.end) : null;
+    let range = null;
+    if (startStr && endStr) {
+      const s = parseMonthParam(startStr);
+      const e = parseMonthParam(endStr);
+      if (!s || !e) return res.status(400).json({ error: 'start/end must be YYYY-MM' });
+      range = { startIso: s.startIso, endIso: e.endIso, label: `${startStr}_to_${endStr}` };
+    } else {
+      const m = parseMonthParam(monthStr);
+      if (!m) return res.status(400).json({ error: 'month must be YYYY-MM' });
+      range = { startIso: m.startIso, endIso: m.endIso, label: `${m.year}-${String(m.month).padStart(2,'0')}` };
+    }
+    const format = String(req.query.format || 'csv').toLowerCase();
+    const chatId = req.query.chatId ? String(req.query.chatId) : null;
+    const category = req.query.category ? String(req.query.category).toLowerCase() : null;
+    const chatIds = chatId ? [chatId] : store.getDistinctChatIds();
+    let rowsAll = [];
+    for (const cid of chatIds) {
+      const rows = store.getEntriesBetween(cid, range.startIso, range.endIso);
+      rowsAll = rowsAll.concat(rows);
+    }
+    if (category) rowsAll = rowsAll.filter((r) => getCategory(r.description) === category);
+    rowsAll.sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
+
+  const baseName = `ledger_${range.label}${chatId ? '_' + chatId : ''}${category ? '_' + category : ''}`;
+    if (format === 'xlsx') {
+      try {
+        const ExcelJS = require('exceljs');
+        const workbook = new ExcelJS.Workbook();
+        const sheet = workbook.addWorksheet('Ledger');
+        sheet.columns = [
+          { header: 'Date', key: 'date', width: 20 },
+          { header: 'Code', key: 'code', width: 10 },
+          { header: 'Amount', key: 'amount', width: 12 },
+          { header: 'Currency', key: 'currency', width: 10 },
+          { header: 'Description', key: 'description', width: 50 },
+          { header: 'ChatId', key: 'chatId', width: 18 },
+        ];
+        for (const e of rowsAll) {
+          sheet.addRow({ date: e.createdAt, code: e.code, amount: e.amount, currency: e.currency || '', description: e.description || '', chatId: e.chat_id || e.chatId || '' });
+        }
+        const fname = `${baseName}.xlsx`;
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', `attachment; filename="${fname}"`);
+        await workbook.xlsx.write(res);
+        res.end();
+      } catch (e) {
+        res.status(500).json({ error: e?.message || String(e) });
+      }
+      return;
+    }
+    // CSV default
+    try {
+      const lines = [];
+      lines.push(['Date','Code','Amount','Currency','Description','ChatId'].join(','));
+      for (const e of rowsAll) {
+        const cols = [
+          String(e.createdAt || ''),
+          String(e.code || ''),
+          String(e.amount || ''),
+          String(e.currency || ''),
+          '"' + String(e.description || '').replace(/"/g,'""') + '"',
+          String(e.chat_id || e.chatId || ''),
+        ];
+        lines.push(cols.join(','));
+      }
+      const csv = lines.join('\n');
+      const fname = `${baseName}.csv`;
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="${fname}"`);
+      res.send(csv);
+    } catch (e) {
+      res.status(500).json({ error: e?.message || String(e) });
+    }
   });
 
   // Daily summary endpoint (per chat optional)
@@ -672,6 +1085,65 @@ function createApiApp({ store, config }) {
         } catch (_) { ent.attachmentUrl = null; }
       }
       res.json({ suggestion: s, entry: ent });
+    } catch (e) {
+      res.status(500).json({ error: e?.message || String(e) });
+    }
+  });
+
+  // Aliases management
+  app.get('/api/aliases', requireAuth, (req, res) => {
+    try {
+      const { AliasStore, AICache } = require('./shared/aliases');
+      const path = require('path');
+      const cfg = require('./config');
+      const aliases = AliasStore.load(cfg.aliasesPath).all();
+      res.json({ data: aliases });
+    } catch (e) {
+      res.status(500).json({ error: e?.message || String(e) });
+    }
+  });
+
+  app.post('/api/aliases', requireAuth, express.json(), (req, res) => {
+    try {
+      const { alias, canonical } = req.body || {};
+      if (!alias || !canonical) return res.status(400).json({ error: 'alias and canonical required' });
+      const { AliasStore } = require('./shared/aliases');
+      const cfg = require('./config');
+      const store = AliasStore.load(cfg.aliasesPath);
+  store.set(alias, canonical);
+  res.json({ ok: true, alias: alias.toLowerCase(), canonical: canonical.toLowerCase(), note: 'Tip: Use one of g/f/t/b/h/r/m/u for first word categories.' });
+    } catch (e) {
+      res.status(500).json({ error: e?.message || String(e) });
+    }
+  });
+
+  app.delete('/api/aliases/:alias', requireAuth, (req, res) => {
+    try {
+      const alias = String(req.params.alias || '');
+      if (!alias) return res.status(400).json({ error: 'alias required' });
+      const { AliasStore } = require('./shared/aliases');
+      const cfg = require('./config');
+      const store = AliasStore.load(cfg.aliasesPath);
+      store.remove(alias);
+      res.json({ ok: true });
+    } catch (e) {
+      res.status(500).json({ error: e?.message || String(e) });
+    }
+  });
+
+  // Promote AI cache mapping to persistent alias (useful when AI maps 'rol'->'salary' and user wants override)
+  app.post('/api/aliases/promote', requireAuth, express.json(), (req, res) => {
+    try {
+      const { token, canonical } = req.body || {};
+      if (!token || !canonical) return res.status(400).json({ error: 'token and canonical required' });
+      const { AliasStore, AICache } = require('./shared/aliases');
+      const cfg = require('./config');
+      const aliases = AliasStore.load(cfg.aliasesPath);
+      const ai = AICache.load(cfg.aiCachePath);
+      // optionally remove from AI cache
+      ai.remove(token);
+      aliases.set(token, canonical);
+      res.json({ ok: true, promoted: { token: token.toLowerCase(), canonical: canonical.toLowerCase() } });
     } catch (e) {
       res.status(500).json({ error: e?.message || String(e) });
     }
