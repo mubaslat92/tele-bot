@@ -724,6 +724,25 @@ function createApiApp({ store, config }) {
   });
 
   // End-of-month summary (extra structured for emailing/export)
+  // Mobile: minimal entry creation for quick-add
+  app.post('/api/mobile/entry', requireAuth, express.json(), async (req, res) => {
+    try {
+      const { amount, currency, description, createdAt, chatId } = req.body || {};
+      const amt = Number(amount);
+      if (!Number.isFinite(amt)) return res.status(400).json({ error: 'amount required' });
+      const desc = typeof description === 'string' ? description : '';
+      if (!desc) return res.status(400).json({ error: 'description required' });
+      const cur = (currency || 'JOD').toString().toUpperCase();
+      const at = createdAt ? new Date(createdAt).toISOString() : new Date().toISOString();
+      const cid = chatId ? String(chatId) : (req.query.chatId ? String(req.query.chatId) : null);
+      const uid = cid || 'mobile';
+      const entry = { chatId: cid, userId: uid, code: 'F', amount: amt, currency: cur, description: desc, createdAt: at };
+      const saved = await store.addEntry(entry);
+      res.json({ ok: true, entry: saved || entry });
+    } catch (e) {
+      res.status(500).json({ error: e?.message || String(e) });
+    }
+  });
   app.get('/api/end-of-month', requireAuth, (req, res) => {
     const m = parseMonthParam(String(req.query.month || ''));
     if (!m) return res.status(400).json({ error: 'month must be YYYY-MM' });
