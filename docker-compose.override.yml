@@ -1,0 +1,31 @@
+services:
+  # Bind-mount data folder so you can browse DB/reports on disk
+  app:
+    volumes:
+      - ./data:/app/data
+
+  worker:
+    volumes:
+      - ./data:/app/data
+
+  # Optional HTTPS reverse proxy (Caddy) — auto-issues Let's Encrypt certs
+  # 1) Point your domain to this host's public IP (A record)
+  # 2) Edit Caddyfile and set your real domain
+  # 3) Compose Up — Caddy will fetch a cert and proxy to app:8090 and /telegram to app:8080
+  caddy:
+    image: caddy:2.8
+    container_name: ledger_caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+
+volumes:
+  caddy_data:
+  caddy_config:

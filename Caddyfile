@@ -1,0 +1,10 @@
+# Replace ledger.example.com with your real domain that points to this host's public IP
+ledger.example.com {
+  encode gzip
+
+  # Telegram webhook path (used only if BOT_MODE=webhook and WEBHOOK_URL matches this domain)
+  reverse_proxy /telegram app:8080
+
+  # Dashboard + API (serves SPA at / and API under /api/*)
+  reverse_proxy app:8090
+}

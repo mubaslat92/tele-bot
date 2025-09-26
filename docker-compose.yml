@@ -1,0 +1,33 @@
+version: "3.9"
+
+services:
+  app:
+    build: .
+    image: telegram-ledger-bot:latest
+    container_name: ledger_app
+    restart: unless-stopped
+    env_file:
+      - ./.env.docker
+    ports:
+      - "8090:8090"   # API + Dashboard
+      - "8080:8080"   # Telegram webhook (if BOT_MODE=webhook)
+    volumes:
+      - ledger_data:/app/data
+    # If you run behind a reverse proxy (Caddy/Nginx/Traefik), you can remove the port mappings
+    # and instead attach to the proxy network.
+
+  worker:
+    image: telegram-ledger-bot:latest
+    container_name: ledger_worker
+    restart: unless-stopped
+    env_file:
+      - ./.env.docker
+    depends_on:
+      - app
+    volumes:
+      - ledger_data:/app/data
+    entrypoint: ["node", "scripts/process_pending_jobs.js"]
+
+volumes:
+  ledger_data:
+    driver: local

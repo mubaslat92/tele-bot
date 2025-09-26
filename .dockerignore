@@ -1,0 +1,14 @@
+node_modules
+npm-debug.log
+.git
+.gitignore
+.DS_Store
+data/*
+!data/.keep
+dashboard-app/node_modules
+dashboard-app/dist
+mobile/ledger_mobile/build
+mobile/ledger_mobile/.dart_tool
+*.sqlite-journal
+*.bak
+*.log
