@@ -190,11 +190,12 @@ export default function App() {
   }, [summary])
 
   // Helper: category display: prefer code mapping when code is a known letter; else first word of description
-  const codeToName: Record<string,string> = { g:'groceries', f:'food', t:'transport', b:'bills', h:'health', r:'rent', m:'misc', u:'uncategorized' }
+  // Derive category purely from description's first word; do NOT use entry.code
+  // Also strip a trailing hashtag (e.g., '#food') if present in the description.
+  const stripHashtagSuffix = (s: string) => (s || '').replace(/\s+#\S+$/i, '').trim()
   const displayCategory = (e: any) => {
-    const code = String(e?.code || '').toLowerCase()
-    if (codeToName[code]) return codeToName[code]
-    const s = String(e?.description || '').trim()
+    const raw = String(e?.description || '')
+    const s = stripHashtagSuffix(raw)
     if (!s) return 'uncategorized'
     return s.split(/\s+/)[0].toLowerCase()
   }
@@ -546,7 +547,7 @@ export default function App() {
                 {entries.map((e: any) => (
                   <tr key={e.id} className="odd:bg-white/5">
                     <td className="p-2">{(e.createdAt || e.date || '').slice(0,10)}</td>
-                    <td className="p-2">{e.description}</td>
+                    <td className="p-2">{stripHashtagSuffix(String(e.description || ''))}</td>
                     <td className="p-2 text-right">{Number(e.amount).toFixed(2)}</td>
                     <td className="p-2 capitalize">{displayCategory(e)}</td>
                   </tr>
