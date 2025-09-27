@@ -313,3 +313,27 @@ How to run (Windows, dev)
 Notes
 - Existing older entries without a known letter `code` will still show category from description’s first word. You can edit entries or migrate if needed.
 - If you enable API auth via `DASHBOARD_AUTH_TOKEN`, pass the token from the mobile app as needed (Dio headers) and from the dashboard via the prompt.
+
+## Release v1.2 (2025-09-27)
+
+This release finalizes the unified 7-category model, improves the bot UX with a hybrid confirmation step, and aligns API/UI.
+
+Highlights
+- Unified categories everywhere using `categoryFromDescription` with these 7 categories (+ `uncategorized`).
+- Bot “Hybrid confirm” for amount-first messages:
+  - If your first word maps to a known category (e.g., `parking` → transport) and there’s no hashtag suffix, the bot creates the entry and shows a confirm keyboard.
+  - Tap “Confirm: transport” or pick another category (groceries/food/transport/bills/health/rent/misc/uncategorized).
+  - Reuses the existing `cat:set` callback so your selection updates the first word and re-sends the confirmation line.
+- Hashtag suffix still bypasses prompts (e.g., `60 parking #transport`).
+- CODE_LABELS remain independent from categories and only affect legacy code labels in some reports.
+
+How to enable Hybrid confirm
+1) In your `.env` set:
+```
+CONFIRM_KNOWN_CATEGORY=true
+```
+2) Restart your bot process/container.
+
+Notes
+- Default remains unchanged (flag off).
+- Unknown first words in amount-first mode still trigger the “teach” prompt or category buttons.
