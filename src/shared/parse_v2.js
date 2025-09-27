@@ -54,7 +54,8 @@ function inferCode(text) {
   const s = (text || '').toLowerCase();
   if (/\b(income|salary|bonus|cashback|revenue|inc|sal)\b/.test(s)) return 'INC';
   if (/\b(transfer|xfer)\b/.test(s)) return 'XFER';
-  if (/\b(invoice|bill|receipt|inv|rcpt)\b/.test(s)) return 'INV';
+  // Treat explicit invoice/receipt keywords as INV, but don't match generic 'bill' to avoid false positives
+  if (/\b(invoice|receipt|inv|rcpt)\b/.test(s)) return 'INV';
   if (/\b(refund|returned)\b/.test(s)) return 'F'; // keep F as primary expense code, negative handled by amount
   return null; // default decided by caller (e.g., F or MISC)
 }
