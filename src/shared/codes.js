@@ -1,5 +1,5 @@
 const CODE_LABELS = {
-  F: "Fatora",
+  F: "Expense",
   RENT: "Rent",
   WAT: "Water",
   ELC: "Electricity",
