@@ -3,6 +3,7 @@ const path = require("path");
 const cron = require("node-cron");
 const fs = require('fs');
 const child_process = require('child_process');
+const { categoryFromDescription } = require('./shared/parse');
 
 function currentMonthRange(date = new Date()) {
   const y = date.getUTCFullYear();
@@ -22,16 +23,10 @@ function parseMonthParam(monthStr) {
   return { year: y, month: m, startIso: start.toISOString(), endIso: end.toISOString() };
 }
 
-function getCategory(desc) {
-  const s = (desc || "").trim();
-  if (!s) return "uncategorized";
-  return s.split(/\s+/)[0].toLowerCase();
-}
+function getCategory(desc) { return categoryFromDescription(desc); }
 
 // Derive category only from the description's first word (stable, independent of code)
-function rowCategory(r) {
-  return getCategory(r.description);
-}
+function rowCategory(r) { return getCategory(r.description); }
 
 // Map between single-letter codes and canonical names and a helper for synonym matching
 const CODE_TO_NAME = { g:'groceries', f:'food', t:'transport', b:'bills', h:'health', r:'rent', m:'misc', u:'uncategorized' };

@@ -174,3 +174,26 @@ module.exports.normalizeDescription = normalizeDescription;
 module.exports.isKnownDescriptionRoot = isKnownDescriptionRoot;
 module.exports.SHORTHANDS = SHORTHANDS;
 module.exports.CANON_CATEGORIES = CANON_CATEGORIES;
+
+// Canonicalize a single token to one of the 7 categories (or 'uncategorized')
+function canonicalizeCategoryToken(token) {
+  const w = String(token || '').toLowerCase().trim();
+  if (!w) return 'uncategorized';
+  if (CANON_CATEGORIES.includes(w)) return w;
+  if (SHORTHANDS.has(w)) return SHORTHANDS.get(w);
+  for (const [key, value] of SHORTHANDS.entries()) {
+    if (w.startsWith(key)) return value;
+  }
+  return 'uncategorized';
+}
+
+// Get category from a description by taking the first word and canonicalizing
+function categoryFromDescription(desc) {
+  const s = String(desc || '').replace(/\s+#\S+$/i, '').trim(); // drop trailing hashtag
+  if (!s) return 'uncategorized';
+  const first = s.split(/\s+/)[0];
+  return canonicalizeCategoryToken(first);
+}
+
+module.exports.canonicalizeCategoryToken = canonicalizeCategoryToken;
+module.exports.categoryFromDescription = categoryFromDescription;

@@ -3,7 +3,7 @@
 
 const axios = require("axios");
 
-const { isKnownDescriptionRoot, SHORTHANDS } = require("./shared/parse");
+const { isKnownDescriptionRoot, SHORTHANDS, CANON_CATEGORIES } = require("./shared/parse");
 const { AICache, AliasStore } = require("./shared/aliases");
 
 // Simple in-memory cache plus disk cache

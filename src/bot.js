@@ -4,7 +4,7 @@ const dayjs = require("dayjs");
 const utc = require("dayjs/plugin/utc");
 const timezone = require("dayjs/plugin/timezone");
 const { generateMonthlyReport } = require("./report");
-const { parseLedgerMessage, normalizeDescription, isKnownDescriptionRoot } = require("./shared/parse");
+const { parseLedgerMessage, normalizeDescription, isKnownDescriptionRoot, categoryFromDescription } = require("./shared/parse");
 const { parseV2 } = require("./shared/parse_v2");
 const { getCodeLabel } = require("./shared/codes");
 const { normalizeUnknownDescriptionFirstWord, aiNormalize } = require("./ai_normalizer");
@@ -19,9 +19,8 @@ const formatEntryLine = (entry, timezoneName) => {
   const when = dayjs(entry.createdAt).tz(timezoneName).format("YYYY-MM-DD HH:mm");
   const currency = entry.currency ? ` ${entry.currency}` : "";
   const desc = (entry.description || '').trim();
-  // Category is always the first word of description
   const parts = desc.split(/\s+/);
-  const category = (parts[0] || 'uncategorized');
+  const category = categoryFromDescription(desc);
   const rest = parts.slice(1).join(' ');
   // Type tag for special codes (optional): Income/Transfer/Invoice/Receipt
   const codeUp = String(entry.code || '').toUpperCase();
@@ -499,12 +498,7 @@ const createBot = ({ config, store }) => {
       const codeUp = String(entry.code || "").toUpperCase();
       if (codeUp !== "XFER") {
         // Determine category from description
-        const getCategory = (desc) => {
-          const s = (desc || "").trim();
-          if (!s) return "uncategorized";
-          return s.split(/\s+/)[0].toLowerCase();
-        };
-        const category = getCategory(entry.description);
+        const category = categoryFromDescription(entry.description);
         // Locate budget cap (chat-specific overrides global)
         const budgets = store.getBudgets(chatId) || [];
         let capJod = null;
@@ -528,7 +522,7 @@ const createBot = ({ config, store }) => {
           for (const r of rows) {
             const rCode = String(r.code || "").toUpperCase();
             if (rCode === "XFER") continue;
-            if (getCategory(r.description) !== category) continue;
+            if (categoryFromDescription(r.description) !== category) continue;
             const amt = Number(r.amount) || 0;
             const cur = (r.currency || "JOD").toUpperCase();
             const rate = cur === "JOD" ? 1 : (store.getFxRateOn(r.createdAt, cur) || 1);
