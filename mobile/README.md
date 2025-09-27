@@ -15,5 +15,6 @@ This folder hosts the Flutter app (Android/iOS) for quick capture and insights.
 3. The Home screen calls `/api/summary` and has a demo button that POSTs to `/api/mobile/entry`.
 
 ## Notes
-- Tokens are passed via `--dart-define` for dev only; move to `flutter_secure_storage` for production.
+- Categories are determined server-side from the first word of `description` (groceries/food/transport/bills/health/rent/misc/uncategorized).
+- Pass API token via `--dart-define=API_TOKEN=...` in dev; store securely (e.g., `flutter_secure_storage`) for production.
 - For iOS builds you’ll need macOS/Xcode.

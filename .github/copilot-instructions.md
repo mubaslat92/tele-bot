@@ -18,9 +18,10 @@ This repo is a Node.js service that logs expenses from Telegram/WhatsApp, serves
 - Dashboard SPA: `dashboard-app/` (Vite/React/Tailwind). Built `dist/` is auto-served at `/`; legacy static UI under `/dashboard`.
 - Worker/OCR: `scripts/process_pending_jobs.js` downloads Telegram attachments, runs OCR (tesseract.js or native tesseract), writes suggestions to DB. Attachments live under `data/attachments/`.
 
-## Category model and conventions
-- Fixed categories (code → name): g→groceries, f→food, t→transport, b→bills, h→health, r→rent, m→misc, u→uncategorized.
-  - Helper `rowCategory(r)` prefers one-letter `code`; otherwise first word of `description` (`getCategory`). Filters accept code or name via `catSynonyms`.
+## Category model and conventions (v1.2)
+- Fixed categories (names): groceries, food, transport, bills, health, rent, misc, uncategorized.
+- Source of truth: first word of `description` canonicalized via `categoryFromDescription`/`canonicalizeCategoryToken` in `src/shared/parse.js`.
+- Legacy one-letter codes may exist but do not drive category anymore. Avoid mapping code→category; always use `categoryFromDescription`.
 - Codes are stored uppercase; transfers use `XFER`; income detection for codes like `INC`, `SAL`, etc. `entries.is_transfer`/`is_income` are derived.
 - Currency default is `JOD`. Base amounts computed with `fx_rates` and saved into `entries.base_amount_jod`/`fx_rate_jod`.
 - Do not change sql.js loading pattern — it uses dynamic `import('sql.js')` to support ESM builds.
@@ -33,9 +34,9 @@ This repo is a Node.js service that logs expenses from Telegram/WhatsApp, serves
 - Worker (OCR): `node scripts/process_pending_jobs.js` (foreground) or spawn via `/debug/process_pending` endpoint.
 - Useful endpoints: `/api/health`, `/api/routes`, `/files`, `/attachments`.
 
-## Patterns to follow when extending
-- Use `requireAuth` and reuse helpers: `parseMonthParam`, `rowCategory`, `catSynonyms`, `currentMonthRange`.
-- Exclude transfers (`code==='XFER'`) and usually income (`is_income`) from expense charts. Keep category filtering consistent across endpoints.
+## Patterns to follow when extending (v1.2)
+- Use `requireAuth` and reuse helpers: `parseMonthParam`, `categoryFromDescription`, `currentMonthRange`.
+- Exclude transfers (`code==='XFER'`) and usually income (`is_income`) from expense charts. Keep category filtering consistent across endpoints using `categoryFromDescription`.
 - When updating entries, recompute and persist derived fields (see `updateEntryById`). Bind `null`, not `undefined`.
 - Windows paths: always use `path.join/resolve`; for public links use `path.basename` + `encodeURIComponent` (see suggestions/attachments).
 
@@ -45,7 +46,10 @@ This repo is a Node.js service that logs expenses from Telegram/WhatsApp, serves
 - Mobile (Android) app
   - Source: `mobile/ledger_mobile` (Flutter). In dev, the Android emulator can’t reach `localhost`; use `http://10.0.2.2:8090` for `API_BASE_URL`. Physical device: use your PC’s LAN IP.
   - Auth: send `Authorization: Bearer <DASHBOARD_AUTH_TOKEN>` for all protected endpoints.
-  - Endpoints used: `GET /api/summary?month=current`, `POST /api/mobile/entry` with `{ amount, currency, description, createdAt?, chatId?, code? }`. Server defaults `chatId`→`"mobile"` and `code`→`"F"` if omitted.
+  - Endpoints used: `GET /api/summary?month=current`, `POST /api/mobile/entry` with `{ amount, currency, description, createdAt?, chatId?, code? }`. Server defaults `chatId`→`"mobile"`. Category is derived from `description`.
   - Common errors: `401` (missing/invalid token), `400` (missing `amount` or `description`).
+
+### Bot UX flags (v1.2)
+- Hybrid confirm for amount-first known words: set `CONFIRM_KNOWN_CATEGORY=true` in `.env`. The bot creates the entry, then prompts inline to confirm/override the category.
 
 If any section above is unclear or you need examples for a specific endpoint or flow (e.g., adding a new export, extending suggestions), tell me what you’re building and I’ll refine this doc.

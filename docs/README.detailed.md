@@ -1,4 +1,4 @@
-# Telegram Ledger Bot — Detailed Notes (Updated 2025‑09‑26)
+# Telegram Ledger Bot — Detailed Notes (Updated 2025‑09‑27)
 
 ## 1) Goals
 - Log expenses from chat with minimal typing.
@@ -32,12 +32,12 @@ Examples:
    - Built-ins (elc→electricity, wat/wtr→water, int/net→internet, hst→hosting, foo→food, …)
    - Aliases from `data/aliases.json` (persistent, up to ~1000)
    - Optional AI fallback via Ollama; result cached to `data/ai_cache.json`
-4) Amount-first assigns code from `DEFAULT_AMOUNT_FIRST_CODE` (fallback `MISC`). Under Parser v2, unknown first tokens are prefixed with `uncategorized` to keep category integrity.
+4) Amount-first assigns code from `DEFAULT_AMOUNT_FIRST_CODE` (fallback `MISC`). Under Parser v2, the category is always derived from the first word of `description` using `categoryFromDescription`. Unknown first tokens become `uncategorized` to keep category integrity. A trailing hashtag (e.g., `#transport`) is accepted and removed from the saved description.
 5) Guard combined messages; prompt to split.
 
 ## 4) Parser versions and AI (optional)
 - Switch parser via `.env`: set `PARSER_VERSION=v2` (recommended) or `v1` (classic).
-- In v2, the first description token is normalized to the canonical set; unknowns become `uncategorized`.
+- In v2, the first description token is normalized to the canonical set via `canonicalizeCategoryToken`; unknowns become `uncategorized`.
 - AI normalizer (optional, local, free):
    - Provider: Ollama; Model: `phi3:mini` (~2–4 GB disk).
    - Triggered only when the first description token isn’t known.
@@ -105,6 +105,12 @@ npm run start
 ```
 
 ---
+
+## Release v1.2 (2025-09-27)
+
+- Unified categories across API/bot/UI using shared helpers `canonicalizeCategoryToken` and `categoryFromDescription`.
+- Bot “Hybrid confirm” (optional): for amount-first and known first tokens (e.g., `parking`→transport), the bot creates the entry and prompts inline to confirm or override the category. Enable via `.env` `CONFIRM_KNOWN_CATEGORY=true`.
+- Hashtag suffix for category (e.g., `#transport`) still bypasses prompts and is stripped from the saved description.
 
 ## Recent changes (2025-09-26)
 
