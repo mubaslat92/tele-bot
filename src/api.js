@@ -691,10 +691,12 @@ function createApiApp({ store, config }) {
           { header: 'Amount', key: 'amount', width: 12 },
           { header: 'Currency', key: 'currency', width: 10 },
           { header: 'Description', key: 'description', width: 50 },
+          { header: 'Category', key: 'category', width: 16 },
           { header: 'ChatId', key: 'chatId', width: 18 },
         ];
         for (const e of rowsAll) {
-          sheet.addRow({ date: e.createdAt, code: e.code, amount: e.amount, currency: e.currency || '', description: e.description || '', chatId: e.chat_id || e.chatId || '' });
+          const cat = categoryFromDescription(e.description);
+          sheet.addRow({ date: e.createdAt, code: e.code, amount: e.amount, currency: e.currency || '', description: e.description || '', category: cat, chatId: e.chat_id || e.chatId || '' });
         }
         const fname = `${baseName}.xlsx`;
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
@@ -709,14 +711,16 @@ function createApiApp({ store, config }) {
     // CSV default
     try {
       const lines = [];
-      lines.push(['Date','Code','Amount','Currency','Description','ChatId'].join(','));
+      lines.push(['Date','Code','Amount','Currency','Description','Category','ChatId'].join(','));
       for (const e of rowsAll) {
+        const cat = categoryFromDescription(e.description);
         const cols = [
           String(e.createdAt || ''),
           String(e.code || ''),
           String(e.amount || ''),
           String(e.currency || ''),
           '"' + String(e.description || '').replace(/"/g,'""') + '"',
+          String(cat || ''),
           String(e.chat_id || e.chatId || ''),
         ];
         lines.push(cols.join(','));
