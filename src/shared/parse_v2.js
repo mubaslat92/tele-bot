@@ -61,6 +61,26 @@ function inferCode(text) {
 }
 
 function buildDescription(remainingTokens, aliasesPath) {
+  // If trailing hashtag category exists (e.g., #g or #groceries), extract and normalize it
+  let forcedCategory = null;
+  if (remainingTokens.length) {
+    const last = String(remainingTokens[remainingTokens.length - 1] || '').trim();
+    if (last.startsWith('#') && last.length > 1) {
+      const t = last.slice(1).toLowerCase();
+      let mapped = null;
+      if (CANON_CATEGORIES.includes(t)) mapped = t;
+      else if (SHORTHANDS.has(t)) mapped = SHORTHANDS.get(t);
+      if (!mapped) {
+        for (const [k, v] of SHORTHANDS.entries()) {
+          if (t.startsWith(k) && CANON_CATEGORIES.includes(v)) { mapped = v; break; }
+        }
+      }
+      if (mapped) {
+        forcedCategory = mapped;
+        remainingTokens = remainingTokens.slice(0, -1); // drop the hashtag token
+      }
+    }
+  }
   // drop helper words and verbs anywhere, then trim stopwords at edges; keep order
   const arr = remainingTokens
     .filter(Boolean)
@@ -93,6 +113,10 @@ function buildDescription(remainingTokens, aliasesPath) {
     for (const [k, v] of SHORTHANDS.entries()) {
       if (first.startsWith(k) && CANON_CATEGORIES.includes(v)) { mapped = v; break; }
     }
+  }
+  if (forcedCategory) {
+    parts[0] = forcedCategory;
+    return { desc: parts.join(' '), rawFirst: rawFirstOriginal };
   }
   if (mapped) {
     parts[0] = mapped;

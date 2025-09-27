@@ -17,9 +17,20 @@ dayjs.extend(timezone);
 
 const formatEntryLine = (entry, timezoneName) => {
   const when = dayjs(entry.createdAt).tz(timezoneName).format("YYYY-MM-DD HH:mm");
-  const desc = entry.description ? ` - ${entry.description}` : "";
   const currency = entry.currency ? ` ${entry.currency}` : "";
-  return `${when} | ${entry.code} ${entry.amount}${currency}${desc}`;
+  const desc = (entry.description || '').trim();
+  // Category is always the first word of description
+  const parts = desc.split(/\s+/);
+  const category = (parts[0] || 'uncategorized');
+  const rest = parts.slice(1).join(' ');
+  // Type tag for special codes (optional): Income/Transfer/Invoice/Receipt
+  const codeUp = String(entry.code || '').toUpperCase();
+  let tag = '';
+  if (codeUp === 'INC') tag = ' [Income]';
+  else if (codeUp === 'XFER') tag = ' [Transfer]';
+  else if (codeUp === 'INV') tag = ' [Invoice]';
+  else if (codeUp === 'RCPT') tag = ' [Receipt]';
+  return `${when} | Recorded ${Number(entry.amount)}${currency} — ${category}${rest?` ${rest}`:''}${tag}`;
 };
 
 const parseReportArgs = (text) => {
@@ -331,7 +342,7 @@ const createBot = ({ config, store }) => {
       console.error('Error handling pending alias response', e);
     }
 
-    const text = ctx.message.text || "";
+  const text = ctx.message.text || "";
     // Gentle guard: if message seems to contain multiple transactions, ask to split
     const sepHint = /(\bor\b|\band\b|;|,)/i.test(text);
     const numCount = (text.match(/(?<![A-Za-z])\d+[\d.,]*/g) || []).length;
@@ -339,7 +350,7 @@ const createBot = ({ config, store }) => {
       return ctx.reply("Please send one transaction per message (I detected multiple amounts). Example: 'F 100 elc' then 'RENT 250 JOD flat in Amman'.");
     }
 
-    let parsed;
+  let parsed;
     if ((config.parserVersion || 'v1') === 'v2') {
   parsed = parseV2(text, { aliasesPath: config.aliasesPath });
       if (!parsed || parsed.error) {
@@ -392,11 +403,18 @@ const createBot = ({ config, store }) => {
           createdAt,
         });
 
-        const keyboard = { reply_markup: { inline_keyboard: [[
+        // Offer quick category choices as inline buttons for a one-tap classification
+        const catButtons = [
+          ['groceries','food','transport'],
+          ['bills','health','rent'],
+          ['misc','uncategorized']
+        ];
+        const inline_keyboard = catButtons.map(row => row.map(c => ({ text: c, callback_data: `cat:set:${tempEntry.id}:${c}` })));
+        inline_keyboard.push([
           { text: `Teach '${descFirstCheck}'`, callback_data: `alias:teach:yes:${tempEntry.id}:${descFirstCheck}` },
           { text: `Save as-is ('${descFirstCheck}')`, callback_data: `alias:teach:no:${tempEntry.id}:${descFirstCheck}` },
-        ]] } };
-        await ctx.reply(`I don't recognize '${descFirstCheck}'. Would you like to teach what it means?`, keyboard);
+        ]);
+        await ctx.reply(`Category not recognized. Pick a category or teach this word:`, { reply_markup: { inline_keyboard } });
         return; // wait for callback to handle teach/save decisions
       } catch (e) {
         console.error('Failed to prompt teach flow', e);
@@ -540,13 +558,7 @@ const createBot = ({ config, store }) => {
       console.error("Budget alert check failed:", e);
     }
 
-    const label = getCodeLabel(entry.code);
-    const labelSuffix = label ? ` (${label})` : "";
-    return ctx.reply(
-      `Recorded ${entry.code}${labelSuffix} ${entry.amount}` +
-        (currency ? ` ${currency}` : "") +
-        (description ? ` - ${description}` : ""),
-    );
+    return ctx.reply(formatEntryLine(entry, config.timezone));
   });
 
   // Photo handler: accept receipts/invoices; save attachment file_id and queue OCR job
@@ -659,7 +671,28 @@ const createBot = ({ config, store }) => {
     // Handle inline button callbacks for alias confirmation
     bot.on('callback_query', async (ctx) => {
       const data = ctx.callbackQuery?.data || '';
-      if (!data.startsWith('alias:')) return ctx.answerCbQuery();
+      if (!data.startsWith('alias:') && !data.startsWith('cat:')) return ctx.answerCbQuery();
+      if (data.startsWith('cat:set:')) {
+        const parts = data.split(':');
+        const entryId = Number(parts[2]);
+        const cat = parts.slice(3).join(':');
+        try {
+          const entry = store.getEntryById(entryId);
+          if (entry) {
+            const pieces = String(entry.description || '').split(/\s+/);
+            pieces[0] = cat.toLowerCase();
+            await store.updateEntryById(entry.id, { description: pieces.join(' ') });
+            await ctx.answerCbQuery({ text: `Category set to ${cat}` });
+            await ctx.editMessageText(`Category set to ${cat}.`);
+            try { await ctx.telegram.sendMessage(entry.chatId, formatEntryLine(store.getEntryById(entry.id) || entry, config.timezone)); } catch (_) {}
+          } else {
+            await ctx.answerCbQuery({ text: 'Entry not found' });
+          }
+        } catch (e) {
+          await ctx.answerCbQuery({ text: 'Failed to set category' });
+        }
+        return;
+      }
       const parts = data.split(':');
       // format: alias:yes|no:entryId:token:aiMapped
       const action = parts[1];
