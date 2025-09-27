@@ -126,22 +126,34 @@ function createApiApp({ store, config }) {
 
   // Serve report files for convenient linking
   app.use("/files", express.static(path.resolve(config.reportsDir)));
-  // Serve the legacy static dashboard UI
-  app.use(
-    "/dashboard",
-    express.static(path.resolve(__dirname, "..", "public", "dashboard")),
-  );
 
-  // Optionally serve the new SPA build if present
+  // Dashboard UI:
+  // If a new SPA build exists (dashboard-app/dist), serve it at both root (/) and /dashboard for backward compatibility.
+  // Otherwise, fall back to the legacy static dashboard under public/dashboard at /dashboard.
   try {
     const spaDir = path.resolve(__dirname, "..", "dashboard-app", "dist");
     if (fs.existsSync(spaDir)) {
+      // Serve SPA assets at root
       app.use(express.static(spaDir));
       app.get(["/", "/index.html"], (_req, res) => {
         res.sendFile(path.join(spaDir, "index.html"));
       });
+      // Also serve SPA at /dashboard to replace the legacy UI
+      app.use("/dashboard", express.static(spaDir));
+    } else {
+      // Legacy UI
+      app.use(
+        "/dashboard",
+        express.static(path.resolve(__dirname, "..", "public", "dashboard")),
+      );
     }
-  } catch (_) {}
+  } catch (_) {
+    // On any error, fall back to legacy UI
+    app.use(
+      "/dashboard",
+      express.static(path.resolve(__dirname, "..", "public", "dashboard")),
+    );
+  }
 
   // Debug: list registered routes
   app.get('/api/routes', (_req, res) => {
