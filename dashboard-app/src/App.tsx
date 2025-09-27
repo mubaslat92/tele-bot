@@ -15,7 +15,7 @@ import { Pie, Line } from 'react-chartjs-2'
 
 ChartJS.register(ArcElement, Tooltip, Legend, CategoryScale, LinearScale, PointElement, LineElement, Filler, TimeScale)
 
-function useApi<T>(path: string, deps: any[] = []) {
+function useApi<T>(path: string, deps: any[] = [], token?: string) {
   const [data, setData] = useState<T | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -23,7 +23,9 @@ function useApi<T>(path: string, deps: any[] = []) {
   useEffect(() => {
     let cancelled = false
     setLoading(true)
-    fetch(path)
+    const headers: Record<string, string> = {}
+    if (token && token.trim()) headers['Authorization'] = 'Bearer ' + token.trim()
+    fetch(path, { headers })
       .then(async (r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`)
         const json = await r.json()
@@ -34,7 +36,7 @@ function useApi<T>(path: string, deps: any[] = []) {
     return () => {
       cancelled = true
     }
-  }, deps)
+  }, [...deps, token])
 
   return { data, loading, error }
 }
@@ -66,6 +68,18 @@ export default function App() {
   const [catHover, setCatHover] = useState(-1)
   const catWrapRef = useRef<HTMLDivElement | null>(null)
 
+  // Auth token handling: allow ?token= and persist in localStorage
+  const [token, setToken] = useState<string>(() => {
+    const sp = new URLSearchParams(window.location.search)
+    const t = sp.get('token') || localStorage.getItem('dash_token') || ''
+    if (t) localStorage.setItem('dash_token', t)
+    return t
+  })
+  useEffect(() => {
+    if (token) localStorage.setItem('dash_token', token)
+    else localStorage.removeItem('dash_token')
+  }, [token])
+
   const qs = (base: string) => {
     const p = new URLSearchParams()
     p.set('month', month || 'current')
@@ -73,20 +87,20 @@ export default function App() {
     return `${base}?${p.toString()}`
   }
 
-  const { data: summary, loading, error } = useApi<Summary>(qs('/api/summary'), [month])
-  const { data: entriesResp } = useApi<EntriesResp>(qs('/api/entries') + '&limit=100', [month, category])
-  const { data: byCat } = useApi<ByCategoryResp>(qs('/api/by-category'), [month])
+  const { data: summary, loading, error } = useApi<Summary>(qs('/api/summary'), [month], token)
+  const { data: entriesResp } = useApi<EntriesResp>(qs('/api/entries') + '&limit=100', [month, category], token)
+  const { data: byCat } = useApi<ByCategoryResp>(qs('/api/by-category'), [month], token)
   // Include category so the time series updates when a category is chosen
-  const { data: daily } = useApi<DailyResp>(qs('/api/daily'), [month, category])
-  const { data: weekly } = useApi<WeeklyResp>(qs('/api/weekly'), [month, category])
+  const { data: daily } = useApi<DailyResp>(qs('/api/daily'), [month, category], token)
+  const { data: weekly } = useApi<WeeklyResp>(qs('/api/weekly'), [month, category], token)
   const monthlyUrl = useMemo(() => {
     const base = `/api/monthly?year=${month.slice(0,4)}`
     return category ? `${base}&category=${encodeURIComponent(category)}` : base
   }, [month, category])
-  const { data: monthlySeries } = useApi<MonthlySeriesResp>(monthlyUrl, [month, category])
-  const { data: budgets } = useApi<BudgetsProgressResp>(qs('/api/budgets/progress'), [month])
+  const { data: monthlySeries } = useApi<MonthlySeriesResp>(monthlyUrl, [month, category], token)
+  const { data: budgets } = useApi<BudgetsProgressResp>(qs('/api/budgets/progress'), [month], token)
   const [suggReload, setSuggReload] = useState(0)
-  const { data: suggestions } = useApi<SuggestionsResp>('/api/suggestions', [suggReload])
+  const { data: suggestions } = useApi<SuggestionsResp>('/api/suggestions', [suggReload], token)
   const entries = entriesResp?.data || []
 
   // Forecast and anomalies
@@ -97,7 +111,7 @@ export default function App() {
     if (category) p.set('category', category)
     return `/api/forecast?${p.toString()}`
   }, [category])
-  const { data: forecast, loading: forecastLoading, error: forecastError } = useApi<ForecastResp>(forecastUrl, [forecastUrl])
+  const { data: forecast, loading: forecastLoading, error: forecastError } = useApi<ForecastResp>(forecastUrl, [forecastUrl], token)
   const catSynonyms = (c: string) => {
     const codeToName: Record<string,string> = { g:'groceries', f:'food', t:'transport', b:'bills', h:'health', r:'rent', m:'misc', u:'uncategorized' }
     const nameToCode: Record<string,string> = Object.fromEntries(Object.entries(codeToName).map(([k,v])=>[v,k]))
@@ -116,7 +130,7 @@ export default function App() {
     p.set('category', category || 'all')
     return `/api/anomalies?${p.toString()}`
   }, [category])
-  const { data: anomalies } = useApi<AnomaliesResp>(anomaliesUrl, [anomaliesUrl])
+  const { data: anomalies } = useApi<AnomaliesResp>(anomaliesUrl, [anomaliesUrl], token)
 
   // Persist category selection
   useEffect(() => {
@@ -188,17 +202,37 @@ export default function App() {
   // Suggestions actions
   const applySuggestion = async (id: number) => {
     try {
-      const r = await fetch(`/api/suggestions/${id}/apply`, { method: 'POST' })
+      const r = await fetch(`/api/suggestions/${id}/apply`, { method: 'POST', headers: token ? { 'Authorization': 'Bearer ' + token } : {} })
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       setSuggReload(x=>x+1)
     } catch (_) {}
   }
   const rejectSuggestion = async (id: number) => {
     try {
-      const r = await fetch(`/api/suggestions/${id}/reject`, { method: 'POST' })
+      const r = await fetch(`/api/suggestions/${id}/reject`, { method: 'POST', headers: token ? { 'Authorization': 'Bearer ' + token } : {} })
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       setSuggReload(x=>x+1)
     } catch (_) {}
+  }
+
+  // Authenticated download helper (respects Content-Disposition filename)
+  async function downloadAuth(url: string) {
+    try {
+      const r = await fetch(url, { headers: token ? { 'Authorization': 'Bearer ' + token } : {} })
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      const blob = await r.blob()
+      let filename = 'download'
+      const disp = r.headers.get('Content-Disposition') || ''
+      const m = /filename\*=UTF-8''([^;]+)|filename=\"?([^\";]+)\"?/i.exec(disp)
+      if (m) filename = decodeURIComponent(m[1] || m[2])
+      const a = document.createElement('a')
+      a.href = URL.createObjectURL(blob)
+      a.download = filename
+      a.click()
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000)
+    } catch (e) {
+      console.error('download failed', e)
+    }
   }
 
   return (
@@ -271,15 +305,15 @@ export default function App() {
                 <div className="absolute right-0 mt-2 w-64 card p-3 z-20">
                   <div className="text-sm font-medium mb-2">Current month</div>
                   <div className="flex gap-2">
-                    <button className="btn flex-1" onClick={() => { window.open(qs('/api/export') + '&format=csv','_blank'); }}>CSV</button>
-                    <button className="btn flex-1" onClick={() => { window.open(qs('/api/export') + '&format=xlsx','_blank'); }}>XLSX</button>
+                    <button className="btn flex-1" onClick={() => { downloadAuth(qs('/api/export') + '&format=csv') }}>CSV</button>
+                    <button className="btn flex-1" onClick={() => { downloadAuth(qs('/api/export') + '&format=xlsx') }}>XLSX</button>
                   </div>
                   <div className="h-px bg-border my-3" />
                   <div className="text-sm font-medium mb-2">This year</div>
                   <button className="btn w-full" onClick={() => {
                     const y = month.slice(0,4);
                     const cat = category?`&category=${encodeURIComponent(category)}`:'';
-                    window.open(`/api/export?start=${y}-01&end=${y}-12${cat}&format=xlsx`, '_blank');
+                    downloadAuth(`/api/export?start=${y}-01&end=${y}-12${cat}&format=xlsx`)
                   }}>Download XLSX</button>
                   <div className="h-px bg-border my-3" />
                   <div className="text-sm font-medium mb-2">Custom range</div>
@@ -290,12 +324,21 @@ export default function App() {
                   </div>
                   <button disabled={!rangeStart||!rangeEnd} className="btn w-full mt-2 disabled:opacity-50" onClick={() => {
                     const cat = category?`&category=${encodeURIComponent(category)}`:'';
-                    window.open(`/api/export?start=${rangeStart}&end=${rangeEnd}${cat}&format=xlsx`, '_blank');
+                    downloadAuth(`/api/export?start=${rangeStart}&end=${rangeEnd}${cat}&format=xlsx`)
                   }}>Download XLSX</button>
                 </div>
               )}
             </div>
-            <div className="text-sm opacity-70 ml-auto min-w-16 text-right">{loading ? 'Loading…' : error ? 'Error' : 'Ready'}</div>
+            <div className="flex items-center gap-2 ml-auto">
+              <input
+                placeholder="Bearer token"
+                value={token}
+                onChange={(e)=>setToken(e.target.value)}
+                className="bg-card border border-border rounded px-2 py-1"
+                style={{ minWidth: 220 }}
+              />
+              <div className="text-sm opacity-70 min-w-16 text-right">{loading ? 'Loading…' : error ? 'Error' : 'Ready'}</div>
+            </div>
           </div>
         </header>
 
