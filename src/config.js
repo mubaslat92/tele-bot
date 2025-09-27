@@ -45,6 +45,8 @@ module.exports = {
   aiModel: process.env.AI_MODEL || "gpt-4o-mini",
   ollamaModel: process.env.OLLAMA_MODEL || "phi3:mini",
   ollamaBaseUrl: process.env.OLLAMA_BASE_URL || "http://localhost:11434",
+  // Bot UX flags
+  confirmKnownCategory: (process.env.CONFIRM_KNOWN_CATEGORY || "false").toLowerCase() === "true",
   // Dashboard/API
   dashboardEnabled: (process.env.DASHBOARD_ENABLED || "true").toLowerCase() === "true",
   dashboardPort: Number.parseInt(process.env.DASHBOARD_PORT || "8090", 10),

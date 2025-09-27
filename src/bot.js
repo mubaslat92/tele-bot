@@ -6,7 +6,6 @@ const timezone = require("dayjs/plugin/timezone");
 const { generateMonthlyReport } = require("./report");
 const { parseLedgerMessage, normalizeDescription, isKnownDescriptionRoot, categoryFromDescription } = require("./shared/parse");
 const { parseV2 } = require("./shared/parse_v2");
-const { getCodeLabel } = require("./shared/codes");
 const { normalizeUnknownDescriptionFirstWord, aiNormalize } = require("./ai_normalizer");
 const { AliasStore, AICache } = require("./shared/aliases");
 
@@ -378,9 +377,9 @@ const createBot = ({ config, store }) => {
       }
     }
 
-    const createdAt = dayjs().utc().toISOString();
-    const currency = parsed.currency || config.defaultCurrency;
-    let description = normalizeDescription(parsed.description);
+  const createdAt = dayjs().utc().toISOString();
+  const currency = parsed.currency || config.defaultCurrency;
+  let description = normalizeDescription(parsed.description);
   // If this message used the amount-first pattern and the first description token is unknown,
     // prompt the user to teach the new word instead of immediately recording MISC.
   const rawFirstToken = (parsed.rawFirst || (text.trim().split(/\s+/)[0] || '').toString()).toLowerCase();
@@ -418,6 +417,38 @@ const createBot = ({ config, store }) => {
       } catch (e) {
         console.error('Failed to prompt teach flow', e);
       }
+    }
+    // Hybrid confirm: if amount-first and first token resolves to a known category, optionally prompt for confirmation/override.
+    try {
+      const hasHashtag = /\s#\S+$/i.test(parsed.description || '');
+      if (config.confirmKnownCategory && messageIsAmountFirst && !hasHashtag) {
+        const firstCanon = categoryFromDescription(parsed.description);
+        if (firstCanon && firstCanon !== 'uncategorized') {
+          // Create an entry first (so we have an id), then prompt for confirmation with inline buttons.
+          const tempEntry = await store.addEntry({
+            chatId,
+            userId,
+            code: parsed.code,
+            amount: parsed.amount,
+            currency,
+            description: parsed.description,
+            createdAt,
+          });
+          const catRows = [
+            ['groceries','food','transport'],
+            ['bills','health','rent'],
+            ['misc','uncategorized']
+          ];
+          const inline_keyboard = [
+            [ { text: `Confirm: ${firstCanon}`, callback_data: `cat:set:${tempEntry.id}:${firstCanon}` } ],
+            ...catRows.map(row => row.map(c => ({ text: c, callback_data: `cat:set:${tempEntry.id}:${c}` })))
+          ];
+          await ctx.reply(`I mapped '${descFirstCheck}' to '${firstCanon}'. Confirm or choose another:`, { reply_markup: { inline_keyboard } });
+          return; // wait for callback to finalize category
+        }
+      }
+    } catch (e) {
+      // Non-fatal; continue without confirm
     }
     // Apply manual alias on first token before AI
     const descParts = (description || "").split(/\s+/);
