@@ -28,13 +28,8 @@ function getCategory(desc) {
   return s.split(/\s+/)[0].toLowerCase();
 }
 
-// Prefer explicit one-letter code on the row, else fallback to first-word category from description
+// Derive category only from the description's first word (stable, independent of code)
 function rowCategory(r) {
-  try {
-    const code = String(r.code || '').toLowerCase();
-    const known = new Set(['g','f','t','b','h','r','m','u']);
-    if (known.has(code)) return code;
-  } catch (_) {}
   return getCategory(r.description);
 }
 
